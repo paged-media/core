@@ -112,12 +112,50 @@ pub struct ShapedGlyph {
     pub glyph_id: u32,
     /// Byte offset within the shaped input that produced this glyph.
     pub cluster: u32,
-    /// Horizontal advance, 1/64 pt.
+    /// Horizontal advance, 1/64 pt (a glyph set upright in vertical text:
+    /// its advance down the column).
     pub x_advance: i32,
     /// Vertical offset applied at render time, 1/64 pt.
     pub y_offset: i32,
     /// Horizontal offset applied at render time, 1/64 pt.
     pub x_offset: i32,
+    /// Set upright in vertical text (see [`Upright`]).
+    pub upright: Option<Upright>,
+}
+
+/// A glyph set upright in vertical text, shaped top to bottom: the point
+/// its outline is drawn from, relative to its vertical pen — the column's
+/// centre line where the glyph's slot begins — 1/64 pt, `dx` across the
+/// page to the right and `dy` down it. Its face's vertical metrics,
+/// vertical forms (`vert`) and, under Metrics kerning, its vertical
+/// proportional widths (`vpal`) are in it and in the advance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Upright {
+    pub dx: i32,
+    pub dy: i32,
+}
+
+/// Whether `c` stands upright in vertical text rather than turning with
+/// the line: Unicode's Vertical_Orientation U, Tu and Tr (CJK and kana,
+/// CJK punctuation, full-width forms), which InDesign 20.0.1 sets upright
+/// in their vertical forms; Latin, digits and half-width forms turn
+/// (vertical-text-probe).
+pub fn upright_in_vertical(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF
+        | 0x2E80..=0x2FFF
+        | 0x3000..=0x303F
+        | 0x3040..=0x31FF
+        | 0x3200..=0x4DBF
+        | 0x4E00..=0x9FFF
+        | 0xA000..=0xA4CF
+        | 0xAC00..=0xD7AF
+        | 0xF900..=0xFAFF
+        | 0xFE10..=0xFE1F
+        | 0xFE30..=0xFE6F
+        | 0xFF00..=0xFF60
+        | 0xFFE0..=0xFFE6
+        | 0x20000..=0x3FFFF)
 }
 
 #[derive(Debug, Clone)]
@@ -155,6 +193,7 @@ pub fn shape_run(face: &Face, text: &str, point_size: f32) -> ShapedRun {
 /// | `ligatures_on=false`      | `Ligatures="false"`        | `liga=0` `clig=0`   |
 /// | `discretionary_ligatures` | `OTFDiscretionaryLigature` | `dlig`              |
 /// | `kerning=Off`             | `KerningMethod="None"`     | `kern=0`            |
+/// | `proportional_widths`     | `KerningMethod="Metrics"`  | `palt`              |
 /// | `fractions`               | `OTFFraction`              | `frac`              |
 /// | `ordinals`                | `OTFOrdinal`               | `ordn`              |
 /// | `swash`                   | `OTFSwash`                 | `swsh`              |
@@ -221,6 +260,20 @@ pub struct ShapingFeatures {
     /// +32 units on each of its ten capitals; typed "(HELLO)-[WORLD]"
     /// sets the plain glyphs at their plain advances).
     pub all_caps: bool,
+    /// A CJK face's proportional widths (`palt`). InDesign's Metrics
+    /// kerning sets them: Kozuka kana under it fall exactly where `palt`
+    /// puts them, and only kerning pairs move them further (InDesign
+    /// 20.0.1, kana-spacing-probe; 「」。 halve the same way). A face
+    /// without the feature is unaffected.
+    pub proportional_widths: bool,
+    /// Shape top to bottom, for glyphs set upright in vertical text: the
+    /// face's vertical forms and metrics, `vpal` for its proportional
+    /// widths and `vkrn` for its kerning (see [`Upright`]).
+    pub vertical: bool,
+    /// The face's ruby glyph forms (`ruby`), which InDesign sets ruby in
+    /// (`RubyOpenTypePro`, on by default: its PDF draws ruby か as
+    /// Adobe-Japan1's ruby form, CID 12681, not CID 843).
+    pub ruby_glyphs: bool,
 }
 
 /// The OpenType `Position` values: each is a glyph substitution, not the
@@ -384,6 +437,22 @@ impl Default for ShapingFeatures {
             historical: false,
             position: OtPosition::Normal,
             all_caps: false,
+            proportional_widths: false,
+            vertical: false,
+            ruby_glyphs: false,
+        }
+    }
+}
+
+impl ShapingFeatures {
+    /// How InDesign sets ruby text: full width (no kerning or proportional
+    /// widths: Kozuka ruby kana stand a full ruby em apart under Metrics
+    /// kerning, ruby-parent-spacing-probe) in the face's ruby forms.
+    pub fn ruby() -> Self {
+        Self {
+            kerning: KerningMethod::Off,
+            ruby_glyphs: true,
+            ..Self::default()
         }
     }
 }
@@ -406,7 +475,15 @@ impl ShapingFeatures {
             on(&mut out, b"dlig");
         }
         if matches!(self.kerning, KerningMethod::Off) {
-            off(&mut out, b"kern");
+            off(&mut out, if self.vertical { b"vkrn" } else { b"kern" });
+        } else if self.vertical {
+            // The shaper leaves vertical kerning to the caller; InDesign's
+            // Metrics kerning applies the face's `vkrn` pairs down a column
+            // as it applies `kern` across a line.
+            on(&mut out, b"vkrn");
+        }
+        if self.proportional_widths {
+            on(&mut out, if self.vertical { b"vpal" } else { b"palt" });
         }
         if self.fractions {
             on(&mut out, b"frac");
@@ -454,6 +531,9 @@ impl ShapingFeatures {
         if self.all_caps {
             on(&mut out, b"case");
             on(&mut out, b"cpsp");
+        }
+        if self.ruby_glyphs {
+            on(&mut out, b"ruby");
         }
         // Stylistic sets: bit i (0-based) ⇒ ss{i+1}. The shaper needs a
         // 4-byte tag per set, so format `ss01`..`ss20` (the OpenType
@@ -518,6 +598,9 @@ pub fn shape_run_with_features_at(
     // the buffer carries. Call the same guess explicitly so segment
     // handling (script from content, direction from script, LTR
     // fallback) stays byte-identical to the rustybuzz behaviour.
+    if features.vertical {
+        buf.set_direction(harfrust::Direction::TopToBottom);
+    }
     buf.guess_segment_properties();
     let hr_features = features.to_harfrust();
     let shaped = face
@@ -578,21 +661,81 @@ pub fn shape_run_with_features_at(
         if is_control_at(info.cluster) {
             continue;
         }
-        exact_pen += pos.x_advance as f64 * exact_scale;
+        // Shaped top to bottom, the advance runs down the column (the
+        // shaper's y points up) and the offsets place the outline from
+        // the vertical pen.
+        let along = if features.vertical {
+            -pos.y_advance
+        } else {
+            pos.x_advance
+        };
+        exact_pen += along as f64 * exact_scale;
         let next = exact_pen.round() as i32;
         let adv = next - rounded_pen;
         rounded_pen = next;
         total += adv;
+        let (x_offset, y_offset, upright) = if features.vertical {
+            let up = Upright {
+                dx: to_fp64(pos.x_offset),
+                dy: -to_fp64(pos.y_offset),
+            };
+            (0, 0, Some(up))
+        } else {
+            (to_fp64(pos.x_offset), to_fp64(pos.y_offset), None)
+        };
         glyphs.push(ShapedGlyph {
             glyph_id: info.glyph_id,
             cluster: info.cluster,
             x_advance: adv,
-            y_offset: to_fp64(pos.y_offset),
-            x_offset: to_fp64(pos.x_offset),
+            y_offset,
+            x_offset,
+            upright,
         });
     }
 
     *pen = exact_pen;
+    ShapedRun {
+        glyphs,
+        total_advance: total,
+    }
+}
+
+/// Shape `text` for vertical text: the characters that stand upright
+/// ([`upright_in_vertical`]) top to bottom, the rest along the line as
+/// usual (they turn with it), each stretch on its own, in text order.
+pub fn shape_run_vertical_at(
+    face: &Face,
+    text: &str,
+    point_size: f32,
+    features: ShapingFeatures,
+    pen: &mut f64,
+) -> ShapedRun {
+    let mut glyphs = Vec::new();
+    let mut total = 0;
+    let mut start = 0;
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    while start < text.len() {
+        let upright = text[start..]
+            .chars()
+            .next()
+            .is_some_and(upright_in_vertical);
+        let end = chars
+            .iter()
+            .map(|&(i, c)| (i, c))
+            .find(|&(i, c)| i > start && upright_in_vertical(c) != upright)
+            .map_or(text.len(), |(i, _)| i);
+        let stretch = ShapingFeatures {
+            vertical: upright,
+            ..features
+        };
+        let shaped = shape_run_with_features_at(face, &text[start..end], point_size, stretch, pen);
+        total += shaped.total_advance;
+        glyphs.extend(shaped.glyphs.into_iter().map(|mut g| {
+            g.cluster += start as u32;
+            g
+        }));
+        start = end;
+    }
     ShapedRun {
         glyphs,
         total_advance: total,
@@ -783,6 +926,7 @@ mod tests {
                 x_advance,
                 y_offset: 0,
                 x_offset: 0,
+                upright: None,
             })
             .collect();
         ShapedRun {
@@ -932,6 +1076,23 @@ mod tests {
             ..Default::default()
         };
         assert!(f.to_harfrust().is_empty());
+    }
+
+    #[test]
+    fn proportional_widths_ask_for_palt() {
+        let f = ShapingFeatures {
+            proportional_widths: true,
+            ..Default::default()
+        };
+        assert_eq!(tag_pairs(&f.to_harfrust()), vec![("palt".to_string(), 1)]);
+    }
+
+    #[test]
+    fn ruby_is_set_full_width_in_ruby_forms() {
+        assert_eq!(
+            tag_pairs(&ShapingFeatures::ruby().to_harfrust()),
+            vec![("kern".to_string(), 0), ("ruby".to_string(), 1)]
+        );
     }
 
     /// Collect `(tag-string, value)` pairs from a feature list so tests

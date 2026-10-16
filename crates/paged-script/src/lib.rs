@@ -1230,6 +1230,31 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("insertHyperlink"),
             5,
         )
+        .function(
+            guarded(paged_delete_hyperlink),
+            js_string!("deleteHyperlink"),
+            1,
+        )
+        .function(
+            guarded(paged_edit_hyperlink),
+            js_string!("editHyperlink"),
+            2,
+        )
+        .function(
+            guarded(paged_update_table_of_contents),
+            js_string!("updateTableOfContents"),
+            1,
+        )
+        .function(
+            guarded(paged_insert_footnote),
+            js_string!("insertFootnote"),
+            3,
+        )
+        .function(
+            guarded(paged_delete_footnote),
+            js_string!("deleteFootnote"),
+            2,
+        )
         // layer attributes
         .function(
             guarded(paged_layer_set_visible),
@@ -2931,6 +2956,115 @@ fn paged_insert_hyperlink(
         end,
         url,
         page,
+    }))
+}
+
+/// `paged.deleteHyperlink(hyperlinkId)` — delete a hyperlink of any origin
+/// by its `Hyperlink` id (`Mutation::DeleteHyperlink`, ADR 164): its text
+/// stops linking. Ids come from `paged.collection("hyperlinks")`.
+fn paged_delete_hyperlink(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let hyperlink_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteHyperlink { hyperlink_id }))
+}
+
+/// `paged.editHyperlink(hyperlinkId, { name?, url?, pageId? })` — rename a
+/// hyperlink or send it somewhere new (`Mutation::EditHyperlink`, ADR 164);
+/// `pageId` wins over `url`, and an empty `name` clears the name.
+fn paged_edit_hyperlink(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let hyperlink_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let (mut name, mut url, mut page) = (None, None, None);
+    if let Some(o) = args.get_or_undefined(1).as_object() {
+        let raw = o.get(js_string!("name"), ctx)?;
+        if !raw.is_undefined() && !raw.is_null() {
+            name = Some(raw.to_string(ctx)?.to_std_string_escaped());
+        }
+        url = prop_string(&o, "url", ctx);
+        page = prop_string(&o, "pageId", ctx).map(PageId);
+    }
+    Ok(apply_bool(&Mutation::EditHyperlink {
+        hyperlink_id,
+        name,
+        url,
+        page,
+    }))
+}
+
+/// `paged.updateTableOfContents(storyId)` — Update Table of Contents
+/// (`Mutation::UpdateTableOfContents`, ADR 165): rewrite a TOC story from
+/// its TOC style over the current layout.
+fn paged_update_table_of_contents(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::UpdateTableOfContents { story_id }))
+}
+
+/// `paged.insertFootnote(storyId, offset, text)` — insert a footnote at
+/// story char `offset` (`Mutation::InsertFootnote`, ADR 163): its
+/// reference there, and the note, its number and separator then `text`.
+/// Returns the new note's id, or `null` when the insert was refused. The
+/// read side is `paged.collection("footnotes")`.
+fn paged_insert_footnote(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let text = opt_string(args.get_or_undefined(2), ctx).unwrap_or_default();
+    let ids = |m: &paged_canvas::CanvasModel| -> Vec<String> {
+        m.footnotes().into_iter().map(|f| f.self_id).collect()
+    };
+    let minted = with_model(|m| {
+        let before = ids(m);
+        m.apply_mutation(&Mutation::InsertFootnote {
+            story_id,
+            offset,
+            paragraph: None,
+            text,
+        })
+        .ok()?;
+        ids(m).into_iter().find(|id| !before.contains(id))
+    });
+    Ok(minted.map_or(JsValue::null(), |id| JsValue::from(js_string!(id))))
+}
+
+/// `paged.deleteFootnote(storyId, footnoteId)` — delete a footnote, its
+/// reference and its note (`Mutation::DeleteFootnote`, ADR 163).
+fn paged_delete_footnote(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let footnote_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteFootnote {
+        story_id,
+        footnote_id,
     }))
 }
 

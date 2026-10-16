@@ -2704,6 +2704,11 @@ pub enum CollectionName {
     ConditionSets,
     Fonts,
     IndexTopics,
+    /// v73 (ADR 163) — the document's footnotes, one row per note: its id,
+    /// story, the story offset of its reference, the label it prints and
+    /// the page it is set on, and its text. Backs `paged.insertFootnote`
+    /// / `deleteFootnote` callers and a Footnotes panel.
+    Footnotes,
     /// Concept 2 — the Ink Manager's ink list (one row per spot
     /// swatch, carrying its output-time settings).
     Inks,
@@ -2763,6 +2768,7 @@ impl CollectionName {
             Self::ConditionSets => "conditionSets",
             Self::Fonts => "fonts",
             Self::IndexTopics => "indexTopics",
+            Self::Footnotes => "footnotes",
             Self::Inks => "inks",
             Self::Sections => "sections",
             Self::Stories => "stories",
@@ -2797,6 +2803,7 @@ impl CollectionName {
             "conditionSets" => Self::ConditionSets,
             "fonts" => Self::Fonts,
             "indexTopics" => Self::IndexTopics,
+            "footnotes" => Self::Footnotes,
             "inks" => Self::Inks,
             "sections" => Self::Sections,
             "stories" => Self::Stories,
@@ -3434,6 +3441,24 @@ pub struct IndexTopicSummary {
     pub self_id: String,
     pub name: String,
     pub sort_order: String,
+}
+
+/// v73 (ADR 163) — one footnote. Backs `documentCollection:footnotes`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct FootnoteSummary {
+    /// The note's `Self` id (`DeleteFootnote.footnoteId`).
+    pub self_id: String,
+    pub story_id: String,
+    /// The story char offset (contiguous) of its reference.
+    pub offset: u32,
+    /// What its reference prints (`[3]`, `iv`, …), once laid out.
+    pub label: Option<String>,
+    /// The page its note is set on, once laid out.
+    pub page_index: Option<u32>,
+    /// The note's text, without its number and separator.
+    pub text: String,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<ConditionSet>` definition. Backs

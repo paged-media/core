@@ -1904,14 +1904,13 @@ fn face_cache_multi_paragraph_render_is_deterministic_and_reuses_glyphs() {
     );
 }
 
-// ─────────────────────────── 15. TOC renderer swap-in ────────────────
+// ─────────────────────────── 15. Table of contents ───────────────────
 //
 // Build a 4-page IDML: pages 1-3 each hold a chapter (one Heading_1
-// paragraph + one Body paragraph), page 4 hosts an unresolved TOC
-// story whose frame carries `AppliedTOCStyle="TOCStyle/Main"`. The
-// renderer should detect the TOC binding, call `Document::resolve_toc`,
-// and emit one synthetic paragraph per chapter (heading text + tab +
-// page label) into the TOC frame's glyph stream.
+// paragraph + one Body paragraph), page 4 hosts a TOC story whose frame
+// carries `AppliedTOCStyle="TOCStyle/Main"`. It prints what it holds;
+// Update Table of Contents writes one paragraph per chapter (heading
+// text + tab + page label) after the style's title.
 
 fn build_toc_idml(stored: Option<&str>) -> Vec<u8> {
     let designmap = br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -2055,8 +2054,11 @@ fn a_toc_story_with_stored_entries_prints_them_unchanged() {
     assert_eq!(toc_glyphs.len(), 11, "{toc_glyphs:?}");
 }
 
+/// An empty TOC story prints nothing: InDesign prints the text a TOC story
+/// holds, and the entries are written only by Update Table of Contents
+/// (ADR 165), never at render.
 #[test]
-fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
+fn an_empty_toc_story_prints_nothing() {
     let bytes = build_toc_idml(None);
     let doc = idml_import::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
@@ -2065,6 +2067,43 @@ fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
         assets: Some(&resolver),
         ..PipelineOptions::default()
     };
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    assert!(glyph_xys(&built.pages[3].list.commands).is_empty());
+}
+
+/// What Update Table of Contents writes (`pipeline::toc_paragraphs` over
+/// the laid-out pages, ADR 165) prints the title, then each heading with
+/// its page number behind a tab.
+#[test]
+fn updated_toc_entries_print_each_heading_with_its_page() {
+    let bytes = build_toc_idml(None);
+    let mut doc = idml_import::import_idml_doc(&bytes).unwrap();
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let first = pipeline::build_document(&doc, &opts).unwrap();
+    let toc = doc.styles.toc_styles["TOCStyle/Main"].clone();
+    let labels: Vec<String> = (1..=first.pages.len()).map(|n| n.to_string()).collect();
+    let entries = doc.resolve_toc_on(&toc, &first.paragraph_pages());
+    let paragraphs = pipeline::toc_paragraphs(&toc, entries, &labels);
+    let texts: Vec<String> = paragraphs
+        .iter()
+        .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Contents",
+            "Chapter One\t1",
+            "Chapter Two\t2",
+            "Chapter Three\t3"
+        ]
+    );
+    let story = doc.stories.iter_mut().find(|s| s.self_id == "u40").unwrap();
+    story.story.paragraphs = paragraphs;
     let built = pipeline::build_document(&doc, &opts).unwrap();
     assert_eq!(built.pages.len(), 4, "expected 4 body pages");
 
@@ -2083,7 +2122,9 @@ fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
 
     // Heading texts are 11 / 11 / 13 letters (no spaces shape to
     // visible glyphs in Inter), plus the trailing page label digit.
-    // Bottom-line baseline check: 3 distinct baselines for 3 entries.
+    // Baseline check: one per entry. The title is set in the document's
+    // default face (the style names no font), which this test does not
+    // register, so it draws no glyph of its own.
     let mut baselines: Vec<f32> = toc_glyphs.iter().map(|g| g.1).collect();
     baselines.sort_by(|a, b| a.partial_cmp(b).unwrap());
     baselines.dedup_by(|a, b| (*a - *b).abs() < 1.0);
@@ -2160,8 +2201,7 @@ fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
         baselines
     );
 
-    // Stories on pages 1-3 still emit their own paragraphs (the
-    // TOC swap-in only affects the TOC-tagged story).
+    // Stories on pages 1-3 still emit their own paragraphs.
     for (page_idx, label) in [(0, "page 1"), (1, "page 2"), (2, "page 3")] {
         let glyphs = glyph_xys(&built.pages[page_idx].list.commands);
         assert!(
@@ -2170,19 +2210,6 @@ fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
             glyphs.len()
         );
     }
-
-    // The TOC story's placeholder paragraph ("placeholder", 11
-    // letters) must NOT appear: the TOC frame's glyph count would
-    // otherwise grow by the placeholder's letters AND a 4th
-    // baseline would land in `baselines`. We already asserted
-    // exactly 3 baselines above; pin once more on the glyph
-    // signature by confirming the TOC frame's emitted glyph
-    // signature is far smaller than the placeholder + 3 entries
-    // (1 + 3 = 4 baselines).
-    //
-    // Together: 3 baselines + ≥ 50 pt spread per baseline =
-    // exactly the resolver's three entries replaced the original
-    // story's content.
 }
 
 // ─────────────────────────── rotated text frames ────────────────────

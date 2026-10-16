@@ -341,7 +341,7 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   leading_override, auto_leading_from_byte, auto_leading, justify_last_line,
 ///   last_line_alignment, single_word_alignment, the tab layout (stops, default grid, line
 ///   starts), the inline objects' advances and the ruby bases' spacing
-///   (`glyph_aki`).
+///   (`ruby_aki`), and whether it is set vertically.
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
 ///   stretch_ratio, shrink_ratio, desired_space_ratio,
 ///   hyphenator language id, hyphen_penalty, kinsoku_enforce,
@@ -471,11 +471,21 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
         h.add_i32(*a);
     }
     // So does a ruby base spaced out to its ruby.
-    h.add_u32(options.glyph_aki.len() as u32);
-    for (range, share) in &options.glyph_aki {
-        h.add_u32(range.start);
-        h.add_u32(range.end);
-        h.add_i32(*share);
+    h.add_u32(u32::from(options.vertical));
+    h.add_u32(options.ruby_aki.len() as u32);
+    for aki in &options.ruby_aki {
+        h.add_u32(aki.chars.len() as u32);
+        for range in &aki.chars {
+            h.add_u32(range.start);
+            h.add_u32(range.end);
+        }
+        for variant in &aki.variants {
+            h.add_u32(variant.len() as u32);
+            for &(before, after) in variant {
+                h.add_i32(before);
+                h.add_i32(after);
+            }
+        }
     }
     fold_compose_options(h, &options.compose);
 }

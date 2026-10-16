@@ -83,3 +83,40 @@ pub(super) fn apply_restore_story(
         invalidation: structural(),
     })
 }
+
+/// v73 — set a story's paragraphs to `paragraphs_json` (a JSON
+/// `Vec<Paragraph>`), as Update Table of Contents writes a TOC story
+/// (ADR 165). The inverse carries the paragraphs it replaced.
+pub(super) fn apply_replace_story_paragraphs(
+    doc: &mut Document,
+    story_id: &str,
+    paragraphs_json: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let paragraphs: Vec<paged_model::Paragraph> =
+        serde_json::from_str(paragraphs_json).map_err(|e| OperationError::InvalidParent {
+            parent: crate::operation::NodeId::Story(story_id.to_string()),
+            child_kind: format!("paragraphs that do not read ({e})"),
+        })?;
+    let parsed = doc
+        .stories
+        .iter_mut()
+        .find(|s| s.self_id == story_id)
+        .ok_or_else(|| {
+            OperationError::NodeNotFound(crate::operation::NodeId::Story(story_id.to_string()))
+        })?;
+    let before = std::mem::replace(&mut parsed.story.paragraphs, paragraphs);
+    // Plain data: serializing it cannot fail.
+    let before_json = serde_json::to_string(&before).expect("paragraphs serialize");
+    let invalidation = super::path_topology::reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::ReplaceStoryParagraphs {
+            story_id: story_id.to_string(),
+            paragraphs_json: paragraphs_json.to_string(),
+        },
+        inverse: Operation::ReplaceStoryParagraphs {
+            story_id: story_id.to_string(),
+            paragraphs_json: before_json,
+        },
+        invalidation,
+    })
+}

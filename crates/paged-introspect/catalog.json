@@ -1009,6 +1009,41 @@
       "summary": "Make a character range a clickable link. Read the result with paged.collection(\"hyperlinks\") — paged.links() is the placed-asset list, not this."
     },
     {
+      "name": "paged.deleteHyperlink",
+      "params": "(hyperlinkId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a hyperlink (any origin) by its id from paged.collection(\"hyperlinks\"): its text stops linking, and its URL or page destination goes when nothing else uses it."
+    },
+    {
+      "name": "paged.editHyperlink",
+      "params": "(hyperlinkId, { name?, url?, pageId? })",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Rename a hyperlink or send it to a new URL or page (pageId wins); an empty name clears it."
+    },
+    {
+      "name": "paged.updateTableOfContents",
+      "params": "(storyId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Update Table of Contents: rewrite a TOC story (one bound to a TOC style) from its style over the current layout — the title, then one paragraph per heading with its page number. Until then it prints the text it holds."
+    },
+    {
+      "name": "paged.insertFootnote",
+      "params": "(storyId, offset, text)",
+      "returns": "string|null",
+      "kind": "author",
+      "summary": "Insert a footnote at a story offset: its reference there, and the note (its number, the separator, then text). Returns the note's id; read the notes with paged.collection(\"footnotes\")."
+    },
+    {
+      "name": "paged.deleteFootnote",
+      "params": "(storyId, footnoteId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a footnote: its reference and its note. Undo puts both back as they were."
+    },
+    {
       "name": "paged.layerSetVisible",
       "params": "(layerId, visible)",
       "returns": "bool",
@@ -1539,6 +1574,11 @@
     "insertField",
     "insertAnchoredFrame",
     "insertHyperlink",
+    "insertFootnote",
+    "deleteFootnote",
+    "deleteHyperlink",
+    "editHyperlink",
+    "updateTableOfContents",
     "setFieldValue",
     "placeImage",
     "replaceImageBytes",

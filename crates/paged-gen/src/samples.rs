@@ -100,6 +100,7 @@ pub mod text_overset;
 pub mod text_wrap;
 pub mod text_wrap_sides;
 pub mod tints;
+pub mod toc;
 pub mod transparency;
 pub mod transparency_targets;
 pub mod variables;
@@ -207,6 +208,7 @@ pub const SAMPLES: &[&str] = &[
     "footnote-straddle",
     "footnote-split",
     "footnote-nosplit",
+    "toc",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -290,6 +292,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "rect-shadows" => rect_shadows::build(),
         "gradient-geometry" => gradient_geometry::build(),
         "tints" => tints::build(),
+        "toc" => toc::build(),
         "table-cell-baseline" => table_cell_baseline::build(),
         "table-cell-tints" => table_cell_tints::build(),
         "table-inline-text" => table_inline_text::build(),
@@ -332,7 +335,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            91,
+            92,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
