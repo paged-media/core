@@ -13246,6 +13246,43 @@ pub fn sniff_font_format(bytes: &[u8]) -> &'static str {
 /// batch: a fonts directory routinely holds licences and READMEs.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn font_registry_from_paths(paths: &[std::path::PathBuf]) -> Vec<FontEntry> {
+    let mut out: Vec<FontEntry> = Vec::new();
+    for file in font_files_from_paths(paths) {
+        if out
+            .iter()
+            .any(|e| e.family == file.family && e.style == file.style)
+        {
+            continue;
+        }
+        out.push(FontEntry {
+            family: file.family,
+            style: file.style,
+            bytes: file.bytes,
+        });
+    }
+    out
+}
+
+/// One face file found by [`font_files_from_paths`]: where it lives,
+/// who it claims to be, and what its licence lets a copy do.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone)]
+pub struct FontFile {
+    pub path: std::path::PathBuf,
+    pub family: String,
+    pub style: Option<String>,
+    /// The OS/2 `fsType` embedding permission: `installable`,
+    /// `restricted`, `preview-and-print` or `editable`; `None` when the
+    /// face carries no OS/2 table (or is a woff container).
+    pub embedding: Option<&'static str>,
+    pub bytes: Vec<u8>,
+}
+
+/// Every face file under `paths` (directories one level deep, sorted),
+/// duplicates included — [`font_registry_from_paths`] keeps the first
+/// per `(family, style)`; a package wants every file a used family has.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn font_files_from_paths(paths: &[std::path::PathBuf]) -> Vec<FontFile> {
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     for path in paths {
         if path.is_dir() {
@@ -13261,9 +13298,9 @@ pub fn font_registry_from_paths(paths: &[std::path::PathBuf]) -> Vec<FontEntry> 
         }
     }
 
-    let mut out: Vec<FontEntry> = Vec::new();
-    for file in files {
-        let Ok(bytes) = std::fs::read(&file) else {
+    let mut out = Vec::new();
+    for path in files {
+        let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
         if sniff_font_format(&bytes).is_empty() {
@@ -13272,12 +13309,20 @@ pub fn font_registry_from_paths(paths: &[std::path::PathBuf]) -> Vec<FontEntry> 
         let Some((family, style)) = font_identity(&bytes) else {
             continue;
         };
-        if out.iter().any(|e| e.family == family && e.style == style) {
-            continue;
-        }
-        out.push(FontEntry {
+        let embedding = ttf_parser::Face::parse(&bytes, 0)
+            .ok()
+            .and_then(|f| f.permissions())
+            .map(|p| match p {
+                ttf_parser::Permissions::Installable => "installable",
+                ttf_parser::Permissions::Restricted => "restricted",
+                ttf_parser::Permissions::PreviewAndPrint => "preview-and-print",
+                ttf_parser::Permissions::Editable => "editable",
+            });
+        out.push(FontFile {
+            path,
             family,
             style,
+            embedding,
             bytes,
         });
     }
