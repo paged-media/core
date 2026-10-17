@@ -477,6 +477,41 @@ pub(crate) fn apply_inner(
             index,
         } => bookmark::apply_move_bookmark(doc, bookmark_id, parent.as_deref(), *index),
         Operation::RestoreBookmarks { state } => bookmark::apply_restore_bookmarks(doc, state),
+        Operation::InsertEndnote {
+            story_id,
+            offset,
+            paragraph,
+            endnote_id,
+            range_id,
+            text,
+            restore,
+        } => endnote::apply_insert_endnote(
+            doc,
+            story_id,
+            *offset,
+            *paragraph,
+            endnote::NewEndnote {
+                endnote_id,
+                range_id,
+                text,
+            },
+            restore.as_deref(),
+        ),
+        Operation::DeleteEndnote { endnote_id } => endnote::apply_delete_endnote(doc, endnote_id),
+        Operation::CreateEndnoteStory {
+            spread_id,
+            page_id,
+            frame_id,
+            story_id,
+        } => endnote::apply_create_endnote_story(
+            doc,
+            endnote::EndnoteStoryIds {
+                spread_id: spread_id.as_deref(),
+                page_id: page_id.as_deref(),
+                frame_id,
+                story_id,
+            },
+        ),
         Operation::InsertHyperlink {
             story_id,
             start,
@@ -1023,6 +1058,7 @@ mod duplicate_nodes;
 pub use duplicate_nodes::{duplicate_demand, duplicate_roots, DuplicateDemand};
 mod bookmark;
 mod duplicate_page;
+mod endnote;
 mod flow;
 mod footnote;
 mod guides;

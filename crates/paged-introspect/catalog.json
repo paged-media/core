@@ -1107,6 +1107,27 @@
       "summary": "Rename a bookmark."
     },
     {
+      "name": "paged.insertEndnote",
+      "params": "(storyId, offset, text)",
+      "returns": "string|null",
+      "kind": "author",
+      "summary": "Insert an endnote at a story offset: its reference there and its range in the endnote story, after the note before it, as InDesign writes one. The first endnote makes the endnote story on a page of its own. Returns the endnote's id; read them with paged.collection(\"endnotes\")."
+    },
+    {
+      "name": "paged.deleteEndnote",
+      "params": "(endnoteId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete an endnote: its reference and its range. Undo puts both back as they were."
+    },
+    {
+      "name": "paged.convertFootnoteToEndnote",
+      "params": "(storyId, footnoteId)",
+      "returns": "string|null",
+      "kind": "author",
+      "summary": "Convert a footnote to an endnote: the footnote goes and an endnote of its text takes its reference's place. Returns the endnote's id."
+    },
+    {
       "name": "paged.moveBookmark",
       "params": "(bookmarkId, parentId?, index?)",
       "returns": "bool",
@@ -1659,6 +1680,9 @@
     "deleteBookmark",
     "renameBookmark",
     "moveBookmark",
+    "insertEndnote",
+    "deleteEndnote",
+    "convertFootnoteToEndnote",
     "setFieldValue",
     "placeImage",
     "replaceImageBytes",

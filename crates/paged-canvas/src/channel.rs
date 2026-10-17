@@ -684,7 +684,10 @@ export type WorkerToMain = WorkerToMainKind & {
 //   createBookmark / renameBookmark / moveBookmark / deleteBookmark and
 //   `BookmarkSummary.parent` (ADR 173), and `ExportPdfWireOptions.bookmarks`
 //   (ADR 171).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(72);
+// v73 — endnotes edited (ADR 174): insertEndnote, deleteEndnote,
+//   convertFootnoteToEndnote and the `endnotes` collection; the first
+//   endnote makes the endnote story on a page of its own.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(73);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -2759,6 +2762,11 @@ pub enum CollectionName {
     /// the page it is set on, and its text. Backs `paged.insertFootnote`
     /// / `deleteFootnote` callers and a Footnotes panel.
     Footnotes,
+    /// ADR 174 — the document's endnotes, one row per note in reference
+    /// order: its id, story, the story offset of its reference, the number
+    /// it prints and its text. Backs `paged.insertEndnote` /
+    /// `deleteEndnote` callers and an Endnotes panel.
+    Endnotes,
     /// ADR 172 — the document's editorial notes, one row per note: its id,
     /// story, the story offset of its place, its text, author and dates.
     /// Backs `paged.insertNote` / `editNote` / `deleteNote` /
@@ -2825,6 +2833,7 @@ impl CollectionName {
             Self::IndexTopics => "indexTopics",
             Self::Footnotes => "footnotes",
             Self::Notes => "notes",
+            Self::Endnotes => "endnotes",
             Self::Inks => "inks",
             Self::Sections => "sections",
             Self::Stories => "stories",
@@ -2861,6 +2870,7 @@ impl CollectionName {
             "indexTopics" => Self::IndexTopics,
             "footnotes" => Self::Footnotes,
             "notes" => Self::Notes,
+            "endnotes" => Self::Endnotes,
             "inks" => Self::Inks,
             "sections" => Self::Sections,
             "stories" => Self::Stories,
@@ -3533,6 +3543,24 @@ pub struct FootnoteSummary {
     /// The page its note is set on, once laid out.
     pub page_index: Option<u32>,
     /// The note's text, without its number and separator.
+    pub text: String,
+}
+
+/// ADR 174 — one endnote. Backs `documentCollection:endnotes`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct EndnoteSummary {
+    /// The `<Endnote>` `Self` id (`DeleteEndnote.endnoteId`).
+    pub id: String,
+    pub story_id: String,
+    /// The story char offset (contiguous) of its reference.
+    pub offset: u32,
+    /// Its `<EndnoteRange>` in the endnote story.
+    pub range_id: Option<String>,
+    /// What its reference prints (`3`, `iv`, …).
+    pub label: Option<String>,
+    /// Its text, without its number and separator.
     pub text: String,
 }
 
@@ -4503,8 +4531,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v72() {
-        assert_eq!(PROTOCOL_VERSION.0, 72);
+    fn protocol_version_is_v73() {
+        assert_eq!(PROTOCOL_VERSION.0, 73);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

@@ -8262,6 +8262,12 @@ pub struct Spread {
     /// Empty when no page declared margins.
     #[serde(default)]
     pub page_margins: std::collections::HashMap<String, MarginPreference>,
+    /// The `Self` ids of this spread's text frames that are
+    /// `<EndnoteTextFrame>`s, the frame InDesign hosts the endnote story in
+    /// (ADR 170; a first endnote makes one, ADR 174). Side list, like
+    /// [`Spread::page_margins`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endnote_frames: Vec<String>,
     /// Per-object `Properties/Label` `KeyValuePair`s, keyed by the
     /// host item's `Self` id — IDML's native extension point (the
     /// plugin-metadata carrier; InDesign preserves Labels verbatim).

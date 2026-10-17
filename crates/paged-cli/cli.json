@@ -4153,6 +4153,9 @@
             "deleteBookmark",
             "renameBookmark",
             "moveBookmark",
+            "insertEndnote",
+            "deleteEndnote",
+            "convertFootnoteToEndnote",
             "setFieldValue",
             "placeImage",
             "replaceImageBytes",
@@ -5256,5 +5259,5 @@
       "subcommands": []
     }
   ],
-  "protocol": 72
+  "protocol": 73
 }
