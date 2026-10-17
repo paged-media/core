@@ -747,6 +747,8 @@ pub fn element_address_kind(path: P) -> &'static str {
     match path {
         P::AppliedParagraphStyle | P::AppliedCharacterStyle | P::AppliedConditions => "storyRange",
         P::AppliedCellStyle => "cell",
+        // ADR 175 — a row's options are written through any cell in it.
+        P::RowStartRow | P::RowKeepWithNext => "cell",
         P::AppliedTableStyle => "table",
         _ if name.starts_with("character") || name.starts_with("paragraph") => "storyRange",
         _ if name.starts_with("cell") => "cell",

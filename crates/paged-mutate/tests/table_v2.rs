@@ -262,6 +262,66 @@ fn cell_edge_color_clear_then_restore() {
     );
 }
 
+// ── ADR 175 — a row's own options, through any of its cells ─────────
+
+#[test]
+fn row_start_row_is_set_through_a_cell_and_undone() {
+    let mut doc = open_doc();
+    let applied = apply(
+        &mut doc,
+        &set(
+            cell_node(2, 1),
+            PropertyPath::RowStartRow,
+            Value::Text("NextFrame".into()),
+        ),
+    )
+    .expect("apply start row");
+    assert_eq!(
+        table(&doc).rows[2].start_row,
+        Some(paged_model::StartParagraph::NextFrame)
+    );
+    assert_eq!(table(&doc).rows[1].start_row, None, "only the cell's row");
+
+    apply(&mut doc, &applied.inverse).expect("apply inverse");
+    assert_eq!(table(&doc).rows[2].start_row, None);
+}
+
+#[test]
+fn row_start_row_refuses_a_value_indesign_does_not_spell() {
+    let mut doc = open_doc();
+    let err = apply(
+        &mut doc,
+        &set(
+            cell_node(1, 0),
+            PropertyPath::RowStartRow,
+            Value::Text("NextSpread".into()),
+        ),
+    )
+    .expect_err("not a StartRow value");
+    assert!(
+        matches!(err, paged_mutate::OperationError::InvalidValue { .. }),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn row_keep_with_next_is_set_through_a_cell_and_undone() {
+    let mut doc = open_doc();
+    let applied = apply(
+        &mut doc,
+        &set(
+            cell_node(1, 0),
+            PropertyPath::RowKeepWithNext,
+            Value::Bool(true),
+        ),
+    )
+    .expect("apply keep with next");
+    assert_eq!(table(&doc).rows[1].keep_with_next_row, Some(true));
+
+    apply(&mut doc, &applied.inverse).expect("apply inverse");
+    assert_eq!(table(&doc).rows[1].keep_with_next_row, Some(false));
+}
+
 // ── W1.12a — header / footer row inserts ────────────────────────────
 
 #[test]

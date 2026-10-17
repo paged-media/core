@@ -1281,6 +1281,18 @@ pub enum PropertyPath {
     CellRightEdgeStrokeWeight,
     CellRightEdgeStrokeTint,
 
+    // ---- ADR 175 — row placement ----------------------------------
+    // A row's own options, addressed through any `NodeId::TableCell` of
+    // the row (InDesign's `cell.parentRow`).
+    /// `<Row StartRow="…">`: where the row starts. `Value::Text`
+    /// carrying the IDML spelling (`"Anywhere"`, `"NextColumn"`,
+    /// `"NextFrame"`, `"NextPage"`, `"NextOddPage"`, `"NextEvenPage"`);
+    /// empty clears it to the default, `Anywhere`. Reflow-affecting.
+    RowStartRow,
+    /// `<Row KeepWithNextRow="…">`: the row stays in the frame of the row
+    /// after it. `Value::Bool`. Reflow-affecting.
+    RowKeepWithNext,
+
     // ---- Aftercare-A — table dimensions (READ-ONLY) -------------
     // Like `NextTextFrame` / `PreviousTextFrame`, these exist only so
     // the inspector can *read* a table's shape as `PropertyEntry`s:
@@ -1822,6 +1834,8 @@ impl PropertyPath {
             PropertyPath::CellRightEdgeStrokeColor => "cell.rightEdgeStrokeColor",
             PropertyPath::CellRightEdgeStrokeWeight => "cell.rightEdgeStrokeWeight",
             PropertyPath::CellRightEdgeStrokeTint => "cell.rightEdgeStrokeTint",
+            PropertyPath::RowStartRow => "row.startRow",
+            PropertyPath::RowKeepWithNext => "row.keepWithNext",
             // Aftercare-A — table dimensions (read-only).
             PropertyPath::TableRowCount => "table.rowCount",
             PropertyPath::TableColumnCount => "table.columnCount",

@@ -8495,6 +8495,7 @@ impl CanvasModel {
             .cells
             .iter()
             .find(|c| c.coords() == Some((col, row)))?;
+        let row_def = table.rows.get(row as usize);
         let entries = vec![
             PropertyEntry {
                 path: PropertyPath::CellFillColor,
@@ -8583,6 +8584,24 @@ impl CanvasModel {
             PropertyEntry {
                 path: PropertyPath::CellRightEdgeStrokeTint,
                 value: Some(Value::Length(cell.right_edge_stroke_tint)),
+            },
+            // ADR 175 — the cell's row: where it starts, and whether it
+            // keeps with the next.
+            PropertyEntry {
+                path: PropertyPath::RowStartRow,
+                value: Some(Value::Text(
+                    row_def
+                        .and_then(|r| r.start_row)
+                        .unwrap_or_default()
+                        .as_idml()
+                        .to_string(),
+                )),
+            },
+            PropertyEntry {
+                path: PropertyPath::RowKeepWithNext,
+                value: Some(Value::Bool(
+                    row_def.and_then(|r| r.keep_with_next_row).unwrap_or(false),
+                )),
             },
         ];
         Some(ElementProperties {

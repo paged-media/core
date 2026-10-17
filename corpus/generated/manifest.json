@@ -487,6 +487,15 @@
       "report": "/tmp/idml-generated-diff/table-cell-baseline/report.json"
     },
     {
+      "name": "table-start-row",
+      "idml": "table-start-row.idml",
+      "pdf": "table-start-row.pdf",
+      "pages": 36,
+      "passing": 36,
+      "diff_dir": "/tmp/idml-generated-diff/table-start-row",
+      "report": "/tmp/idml-generated-diff/table-start-row/report.json"
+    },
+    {
       "name": "tables",
       "idml": "tables.idml",
       "pdf": "tables.pdf",
