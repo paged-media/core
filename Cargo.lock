@@ -2889,6 +2889,7 @@ dependencies = [
  "paged-model",
  "paged-mutate",
  "paged-scene",
+ "paged-store",
  "paged-text",
  "paged-wire",
  "resvg",

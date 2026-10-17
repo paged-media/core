@@ -44,6 +44,9 @@ paged-model = { path = "../paged-model" }
 paged-wire = { path = "../paged-wire", default-features = false }
 idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "536fba682c7db947ef1b2f76074efc3d5023b752" }
 paged-scene = { path = "../paged-scene" }
+# The `.paged` container's native model part (ADR 181): model crates only,
+# no mutation engine, so the read-only viewer may open it.
+paged-store = { path = "../paged-store" }
 paged-flow = { path = "../paged-flow" }
 paged-text = { path = "../paged-text" }
 paged-color = { path = "../paged-color" }
