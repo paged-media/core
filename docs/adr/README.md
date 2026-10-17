@@ -104,6 +104,8 @@ is not written yet.
 | [173](173-bookmarks-edited.md) | Bookmarks created, renamed, moved and deleted as InDesign does it | Accepted 2026-10-16 |
 | [174](174-endnotes-inserted-and-deleted.md) | Endnotes inserted, deleted and converted from footnotes, as InDesign does it | Accepted 2026-10-17 |
 | [175](175-table-row-start.md) | A table row starts where its Start Row option asks, as InDesign sets it | Accepted 2026-10-17 |
+| [176](176-nested-tables.md) | A table nested in a cell is drawn as any table is, as InDesign draws it | Accepted 2026-10-17 |
+| [177](177-table-rows-fit-the-text-area.md) | A frame holds the table rows its text area holds, strokes included | Accepted 2026-10-17 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

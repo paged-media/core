@@ -95,10 +95,6 @@ impl<'a> AlternatingFillAxis<'a> {
 ///   rows duplicate at the bottom of every frame except the last
 ///   (Task T3.1). `RepeatingHeader="false"` / `RepeatingFooter="false"`
 ///   opt out.
-// Range-loops over `row_heights` carry the row index (`r`) as data
-// — it doubles as a template index into `table.rows` / `table.cells`
-// — so the `needless_range_loop` lint is a false positive here.
-#[allow(clippy::needless_range_loop)]
 pub(super) fn emit_table_into_chain(
     em: &mut StoryEmitter,
     table: &paged_model::Table,
@@ -106,9 +102,69 @@ pub(super) fn emit_table_into_chain(
     pages: &mut [BuiltPage],
     total_stats: &mut PipelineStats,
 ) {
+    emit_table(
+        em,
+        table,
+        TablePlace::Chain { line_align },
+        pages,
+        total_stats,
+    );
+}
+
+/// A table nested in a table cell, drawn as any table is — strokes,
+/// fills, spans, header rows, cell styles — at `(left, top)` on `page`
+/// (ADR 176). Returns the height it takes in its cell.
+fn emit_nested_table(
+    em: &mut StoryEmitter,
+    table: &paged_model::Table,
+    (left, top): (f32, f32),
+    page: usize,
+    pages: &mut [BuiltPage],
+    total_stats: &mut PipelineStats,
+) -> f32 {
+    emit_table(
+        em,
+        table,
+        TablePlace::Nested { left, top, page },
+        pages,
+        total_stats,
+    )
+}
+
+/// Where a table's rows go.
+#[derive(Clone, Copy)]
+enum TablePlace {
+    /// Into the story's frame chain from the emitter's cursor, a
+    /// character of its line aligned by `line_align`.
+    Chain { line_align: f32 },
+    /// At a fixed page-local origin inside one cell, with no height
+    /// limit: a table nested in a table cell (ADR 176). InDesign sets
+    /// it at its declared column widths, past the cell's edge when they
+    /// are wider (`table-nested` page 6). Its cells take no caret
+    /// addresses or hit-test rects: the wire reaches top-level tables
+    /// only (nested-cell editing is deferred).
+    Nested { left: f32, top: f32, page: usize },
+}
+
+// Range-loops over `row_heights` carry the row index (`r`) as data
+// — it doubles as a template index into `table.rows` / `table.cells`
+// — so the `needless_range_loop` lint is a false positive here.
+#[allow(clippy::needless_range_loop)]
+fn emit_table(
+    em: &mut StoryEmitter,
+    table: &paged_model::Table,
+    place: TablePlace,
+    pages: &mut [BuiltPage],
+    total_stats: &mut PipelineStats,
+) -> f32 {
     if table.cells.is_empty() {
-        return;
+        return 0.0;
     }
+    let nested = match place {
+        TablePlace::Nested { left, top, page } => Some((left, top, page)),
+        TablePlace::Chain { .. } => None,
+    };
+    let chain_len = if nested.is_some() { 1 } else { em.chain.len() };
     let col_widths: Vec<f32> = table
         .columns
         .iter()
@@ -135,98 +191,10 @@ pub(super) fn emit_table_into_chain(
     let total_rows = table.rows.len();
     let total_cols = col_widths.len();
 
-    // Content-driven row growth, by InDesign's rules (`plan_cell_block`):
-    // a cell needs its top inset + its last baseline + its bottom inset,
-    // and a row is as tall as its tallest cell, never under its floor
-    // `max(SingleRowHeight, MinimumHeight)`. Under a `MaximumHeight` a
-    // cell keeps the lines that fit and the row is as tall as THEY need:
-    // InDesign made a capped row 20.826 pt, not its 30 pt cap, when the
-    // second line would have needed 35.2 (2026-10-02, `tables-rows`
-    // page 6). A fixed row (`AutoGrow="false"`) is capped at its floor,
-    // so it stays exactly that tall and its cells keep the lines that
-    // fit (`row_cap_pt`). For RowSpan > 1 cells only the LAST spanned
-    // row grows to cover the shortfall, which keeps a span from blowing
-    // up every row it crosses.
-    let mut row_heights: Vec<f32> = table.rows.iter().map(row_floor_pt).collect();
-    let region_cell_style_for = |c: usize, r: usize| -> Option<&str> {
-        if r < header_count {
-            return resolved_table.header_region_cell_style.as_deref();
-        }
-        if footer_count > 0 && r + footer_count >= total_rows {
-            return resolved_table.footer_region_cell_style.as_deref();
-        }
-        if c == 0 {
-            if let Some(s) = resolved_table.left_column_region_cell_style.as_deref() {
-                return Some(s);
-            }
-        }
-        if c + 1 == total_cols {
-            if let Some(s) = resolved_table.right_column_region_cell_style.as_deref() {
-                return Some(s);
-            }
-        }
-        resolved_table.body_region_cell_style.as_deref()
-    };
-
-    // Per-cell measured content and effective (top, bottom) insets,
-    // keyed by the cell's starting (col, row). The emit pass draws from
-    // the same block, so a row is sized from exactly what it draws.
-    let mut cell_blocks: std::collections::HashMap<(u32, u32), (CellBlock, CellInsets)> =
-        std::collections::HashMap::with_capacity(table.cells.len());
-    for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else {
-            continue;
-        };
-        if covered.contains(&(c, r)) {
-            continue;
-        }
-        let (cu, ru) = (c as usize, r as usize);
-        if cu >= col_widths.len() || ru >= total_rows {
-            continue;
-        }
-        let span_cols = cell.column_span.max(1) as usize;
-        let last_c = (cu + span_cols).min(col_widths.len());
-        let resolved_cell = cell
-            .applied_cell_style
-            .as_deref()
-            .filter(|id| !is_none_style_id(id))
-            .or_else(|| region_cell_style_for(cu, ru))
-            .map(|id| em.document.styles.resolve_cell(id))
-            .unwrap_or_default();
-        let insets = effective_cell_insets(cell, &resolved_cell);
-        let inner_w = (col_x[last_c] - col_x[cu] - insets.left - insets.right).max(0.0);
-        let block = plan_cell_block(
-            em,
-            &cell.paragraphs,
-            inner_w,
-            CellFirstBaseline::of(cell, &resolved_cell),
-        );
-        cell_blocks.insert((c, r), (block, insets));
-    }
-    for r in 0..total_rows {
-        let max_h = table.rows.get(r).map_or(f32::INFINITY, row_cap_pt);
-        let mut required = row_heights[r];
-        for cell in &table.cells {
-            let Some((c, sr)) = cell.coords() else {
-                continue;
-            };
-            let span = cell.row_span.max(1) as usize;
-            let sru = sr as usize;
-            if sru + span - 1 != r {
-                continue;
-            }
-            let Some((block, insets)) = cell_blocks.get(&(c, sr)) else {
-                continue;
-            };
-            let (top, bottom) = (insets.top, insets.bottom);
-            // Heights already grown for the prior rows of the span.
-            let prior: f32 = (sru..r).map(|i| row_heights[i]).sum();
-            let (fit_bottom, _) = block.fitted(prior + max_h - top - bottom);
-            required = required.max(top + fit_bottom + bottom - prior);
-        }
-        row_heights[r] = required.min(max_h);
-    }
-
+    // Rows grown to their content, by InDesign's rules (`grow_rows`).
+    let (row_heights, cell_blocks) = grow_rows(em, table, &col_x, &covered, &resolved_table);
+    let region_cell_style_for =
+        |c: usize, r: usize| region_cell_style(&resolved_table, table, total_cols, c, r);
     // Repeating-header / repeating-footer flags. IDML defaults
     // both to true (the attribute is absent in the common case
     // and the rows *do* repeat); explicit `RepeatingHeader="false"`
@@ -270,6 +238,9 @@ pub(super) fn emit_table_into_chain(
         kind: RowKind,
     }
     let frame_basis_for = |chain_idx: usize, x_shift: f32| -> (f32, f32, f32, f32, usize) {
+        if let Some((left, top, page)) = nested {
+            return (left + x_shift, top, f32::INFINITY, 0.0, page);
+        }
         let frame = em.chain[chain_idx];
         let target_page = em.chain_pages[chain_idx];
         let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
@@ -277,7 +248,9 @@ pub(super) fn emit_table_into_chain(
         let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
         let table_left_pt = sx - ox + insets[1] + x_shift;
         let frame_top_in_page = sy - oy;
-        let frame_height = frame.bounds.height();
+        // Rows fit the text area, above the frame's bottom inset (its
+        // stroke's share folded in): `table-fit-probe`, below.
+        let frame_height = frame.bounds.height() - insets[2];
         (
             table_left_pt,
             frame_top_in_page,
@@ -291,7 +264,7 @@ pub(super) fn emit_table_into_chain(
     // places it (`line_align`: 0 left, ½ centred, 1 right): asked of
     // InDesign 20.0.1 (`table-inline-text`), the extent it aligns is the
     // table's width plus its outer strokes — the strokes' outer edges.
-    let line_shift = {
+    let line_shift = if let TablePlace::Chain { line_align } = place {
         let column = em
             .region_widths
             .get(em.frame_idx)
@@ -300,12 +273,19 @@ pub(super) fn emit_table_into_chain(
             .unwrap_or(0.0);
         let extent = total_w + border_off_left + outer_border_right_offset(table);
         ((column - extent) * line_align).max(0.0)
+    } else {
+        0.0
     };
-    let mut chain_idx = em.frame_idx;
+    let mut chain_idx = if nested.is_some() { 0 } else { em.frame_idx };
+    let x_shift = if nested.is_some() {
+        0.0
+    } else {
+        em.column_x_shift_pt + line_shift
+    };
     let (mut tab_left, mut frame_top_in_page, mut frame_height, mut top_inset, mut target_page) =
-        frame_basis_for(chain_idx, em.column_x_shift_pt + line_shift);
+        frame_basis_for(chain_idx, x_shift);
     tab_left += border_off_left;
-    let mut row_top_y_in_frame = if em.y_cursor >= 0 {
+    let mut row_top_y_in_frame = if nested.is_none() && em.y_cursor >= 0 {
         em.y_cursor as f32 / paged_text::shape::ADVANCE_PRECISION
             - em.options.default_point_size * 0.8
     } else {
@@ -410,14 +390,30 @@ pub(super) fn emit_table_into_chain(
         // walking every frame of the chain. Not measured: how InDesign
         // places a run that does not fit the LAST frame — here its rows
         // are placed one by one and the first that does not fit oversets.
-        let run_h: f32 = if r > body_range.start && keeps_with_next(table.rows.get(r - 1)) {
-            h
+        let (run_h, run_end) = if r > body_range.start && keeps_with_next(table.rows.get(r - 1)) {
+            (h, r)
         } else {
             let mut end = r;
             while end + 1 < body_range.end && keeps_with_next(table.rows.get(end)) {
                 end += 1;
             }
-            row_heights[r..=end].iter().sum()
+            (row_heights[r..=end].iter().sum(), end)
+        };
+        // A frame holds its rows down to the outer half of the stroke
+        // under its last one — the row itself, the end of a kept run, or
+        // the replayed footer. Asked of InDesign 20.0.1
+        // (`table-fit-probe`, 2026-10-17): six 20 pt rows with 1 pt strokes
+        // need 121 pt of text area (120.9 holds five), 125 with a 4 pt
+        // bottom inset, and a 1 pt centred frame stroke insets both ends.
+        let under = |last: usize| {
+            row_bottom_half(
+                table,
+                if repeating_footer {
+                    total_rows - 1
+                } else {
+                    last
+                },
+            )
         };
         // ADR 175 — a row's Start Row option moves it, and the rows after
         // it, as a paragraph's StartParagraph moves its first line
@@ -426,7 +422,12 @@ pub(super) fn emit_table_into_chain(
         // empty frame between. A row that already opens what the rule
         // asks for stays.
         let mut start_to = None;
-        if let Some(rule) = table.rows.get(r).and_then(|row| row.start_row) {
+        if let Some(rule) = table
+            .rows
+            .get(r)
+            .and_then(|row| row.start_row)
+            .filter(|_| nested.is_none())
+        {
             let frames: Vec<Option<&str>> = em.chain.iter().map(|f| f.self_id.as_deref()).collect();
             let last_placed = if placed_in_frame > 0 {
                 Some(chain_idx)
@@ -451,9 +452,11 @@ pub(super) fn emit_table_into_chain(
         // used to be placed in the next frame unconditionally.
         loop {
             let need_extra_for_split = footer_reserved_h;
-            let would_overflow = row_top_y_in_frame + h + need_extra_for_split > frame_height;
+            let would_overflow =
+                row_top_y_in_frame + h + need_extra_for_split + under(r) > frame_height;
             let run_overflows = body_placed_in_frame > 0
-                && row_top_y_in_frame + run_h + need_extra_for_split > frame_height;
+                && row_top_y_in_frame + run_h + need_extra_for_split + under(run_end)
+                    > frame_height;
             // In the LAST frame there is nowhere to advance to, so a row
             // that does not fit is overset — even the first one. The
             // `placed_in_frame > 0` guard that used to sit here belongs to
@@ -465,12 +468,12 @@ pub(super) fn emit_table_into_chain(
             // and was one row here).
             let start_here = start_to.take();
             if start_here.is_none() {
-                if would_overflow && chain_idx + 1 >= em.chain.len() && !last_frame_grows_height {
+                if would_overflow && chain_idx + 1 >= chain_len && !last_frame_grows_height {
                     overset_at = Some(r);
                     break;
                 }
                 if !((would_overflow || run_overflows)
-                    && chain_idx + 1 < em.chain.len()
+                    && chain_idx + 1 < chain_len
                     && placed_in_frame > 0)
                 {
                     break;
@@ -810,7 +813,7 @@ pub(super) fn emit_table_into_chain(
             // source row, so a click on a replayed header resolves to the
             // original cell). Only addressable tables (those with a `Self`)
             // are recorded; others fall back to the frame-level hit.
-            if let Some(table_id) = table.self_id.as_deref() {
+            if let Some(table_id) = table.self_id.as_deref().filter(|_| nested.is_none()) {
                 pages[target_page].cell_rects.push(CellRect {
                     story_id: em.current_story_id.clone(),
                     table_id: table_id.to_string(),
@@ -1099,11 +1102,15 @@ pub(super) fn emit_table_into_chain(
             // over `cell.paragraphs` (including any nested-table /
             // empty paragraphs) so it lines up byte-for-byte with the
             // wire-side `locate` walk over `cell.paragraphs`.
-            let cell_addr_base: Option<CellAddr> = table.self_id.as_deref().map(|tid| CellAddr {
-                table_id: tid.to_string(),
-                row: r as u32,
-                col: c as u32,
-            });
+            let cell_addr_base: Option<CellAddr> = table
+                .self_id
+                .as_deref()
+                .filter(|_| nested.is_none())
+                .map(|tid| CellAddr {
+                    table_id: tid.to_string(),
+                    row: r as u32,
+                    col: c as u32,
+                });
             // W1.11a — cell vertical justification, decided BEFORE drawing
             // from the measured block, so glyphs and caret lines land
             // together. Precedence mirrors every other per-cell knob: an
@@ -1165,16 +1172,13 @@ pub(super) fn emit_table_into_chain(
                         inner_h - origin,
                         block.first_baseline,
                     ),
-                    // Phase 5 — nested table inside a cell paragraph, laid
-                    // out at its measured top; further nesting recurses
-                    // through emit_nested_table_inline.
+                    // A table nested in the cell, at its measured top (ADR
+                    // 176); further nesting recurses.
                     CellItem::Table { table, top, .. } => {
-                        emit_nested_table_inline(
+                        emit_nested_table(
                             em,
                             table,
-                            inner_left,
-                            inner_top + top + shift,
-                            inner_w,
+                            (inner_left, inner_top + top + shift),
                             target_page,
                             pages,
                             total_stats,
@@ -1492,6 +1496,10 @@ pub(super) fn emit_table_into_chain(
         }
     }
 
+    // A nested table takes its rows and its outer strokes in its cell.
+    if nested.is_some() {
+        return final_y_in_frame + outer_border_bottom_offset(table);
+    }
     // Advance the active frame_idx + y_cursor to the row after the
     // last one we placed. The host emitter loop reads em.frame_idx
     // and em.y_cursor when continuing the surrounding paragraph
@@ -1507,6 +1515,133 @@ pub(super) fn emit_table_into_chain(
         let stat_page = em.chain_pages[em.frame_idx];
         pages[stat_page].stats.paragraphs += 1;
     }
+    0.0
+}
+
+/// A table's rows grown to their content, by InDesign's rules, and each
+/// cell's measured content and effective insets keyed by its starting
+/// `(col, row)` — what the emitter draws from, and what a host cell
+/// measures a nested table by, so the two never disagree (ADR 176).
+///
+/// Content-driven row growth (`plan_cell_block`): a cell needs its top
+/// inset + its last baseline + its bottom inset, and a row is as tall as
+/// its tallest cell, never under its floor `max(SingleRowHeight,
+/// MinimumHeight)`. Under a `MaximumHeight` a cell keeps the lines that
+/// fit and the row is as tall as THEY need: InDesign made a capped row
+/// 20.826 pt, not its 30 pt cap, when the second line would have needed
+/// 35.2 (2026-10-02, `tables-rows` page 6). A fixed row
+/// (`AutoGrow="false"`) is capped at its floor, so it stays exactly that
+/// tall and its cells keep the lines that fit (`row_cap_pt`). For
+/// RowSpan > 1 cells only the LAST spanned row grows to cover the
+/// shortfall, which keeps a span from blowing up every row it crosses.
+#[allow(clippy::type_complexity)]
+fn grow_rows<'t>(
+    em: &StoryEmitter,
+    table: &'t paged_model::Table,
+    col_x: &[f32],
+    covered: &std::collections::HashSet<(u32, u32)>,
+    resolved_table: &paged_model::ResolvedTable,
+) -> (
+    Vec<f32>,
+    std::collections::HashMap<(u32, u32), (CellBlock<'t>, CellInsets)>,
+) {
+    let total_rows = table.rows.len();
+    let mut row_heights: Vec<f32> = table.rows.iter().map(row_floor_pt).collect();
+
+    // Per-cell measured content and effective (top, bottom) insets,
+    // keyed by the cell's starting (col, row). The emit pass draws from
+    // the same block, so a row is sized from exactly what it draws.
+    let mut cell_blocks: std::collections::HashMap<(u32, u32), (CellBlock, CellInsets)> =
+        std::collections::HashMap::with_capacity(table.cells.len());
+    for cell in &table.cells {
+        let Some((c, r)) = cell.coords() else {
+            continue;
+        };
+        if covered.contains(&(c, r)) {
+            continue;
+        }
+        let (cu, ru) = (c as usize, r as usize);
+        if cu + 1 >= col_x.len() || ru >= total_rows {
+            continue;
+        }
+        let span_cols = cell.column_span.max(1) as usize;
+        let last_c = (cu + span_cols).min(col_x.len() - 1);
+        let resolved_cell = cell
+            .applied_cell_style
+            .as_deref()
+            .filter(|id| !is_none_style_id(id))
+            .or_else(|| {
+                region_cell_style(resolved_table, table, col_x.len().saturating_sub(1), cu, ru)
+            })
+            .map(|id| em.document.styles.resolve_cell(id))
+            .unwrap_or_default();
+        let insets = effective_cell_insets(cell, &resolved_cell);
+        let inner_w = (col_x[last_c] - col_x[cu] - insets.left - insets.right).max(0.0);
+        let block = plan_cell_block(
+            em,
+            &cell.paragraphs,
+            inner_w,
+            CellFirstBaseline::of(cell, &resolved_cell),
+        );
+        cell_blocks.insert((c, r), (block, insets));
+    }
+    for r in 0..total_rows {
+        let max_h = table.rows.get(r).map_or(f32::INFINITY, row_cap_pt);
+        let mut required = row_heights[r];
+        for cell in &table.cells {
+            let Some((c, sr)) = cell.coords() else {
+                continue;
+            };
+            let span = cell.row_span.max(1) as usize;
+            let sru = sr as usize;
+            if sru + span - 1 != r {
+                continue;
+            }
+            let Some((block, insets)) = cell_blocks.get(&(c, sr)) else {
+                continue;
+            };
+            let (top, bottom) = (insets.top, insets.bottom);
+            // Heights already grown for the prior rows of the span.
+            let prior: f32 = (sru..r).map(|i| row_heights[i]).sum();
+            let (fit_bottom, _) = block.fitted(prior + max_h - top - bottom);
+            required = required.max(top + fit_bottom + bottom - prior);
+        }
+        row_heights[r] = required.min(max_h);
+    }
+
+    (row_heights, cell_blocks)
+}
+
+/// The table style's region cell style for grid position `(c, r)`:
+/// header and footer rows first, then the left and right columns, then
+/// the body.
+fn region_cell_style<'a>(
+    resolved_table: &'a paged_model::ResolvedTable,
+    table: &paged_model::Table,
+    total_cols: usize,
+    c: usize,
+    r: usize,
+) -> Option<&'a str> {
+    let header_count = table.header_row_count as usize;
+    let footer_count = table.footer_row_count as usize;
+    let total_rows = table.rows.len();
+    if r < header_count {
+        return resolved_table.header_region_cell_style.as_deref();
+    }
+    if footer_count > 0 && r + footer_count >= total_rows {
+        return resolved_table.footer_region_cell_style.as_deref();
+    }
+    if c == 0 {
+        if let Some(s) = resolved_table.left_column_region_cell_style.as_deref() {
+            return Some(s);
+        }
+    }
+    if c + 1 == total_cols {
+        if let Some(s) = resolved_table.right_column_region_cell_style.as_deref() {
+            return Some(s);
+        }
+    }
+    resolved_table.body_region_cell_style.as_deref()
 }
 
 /// Every grid position a merged cell swallows.
@@ -1618,6 +1753,62 @@ fn outer_border_right_offset(table: &paged_model::Table) -> f32 {
         );
     }
     right * 0.5
+}
+
+/// Half the weight of the stroke drawn on the table's bottom edge (the
+/// widest of its last row's bottom edges).
+fn outer_border_bottom_offset(table: &paged_model::Table) -> f32 {
+    let rows = table.rows.len() as u32;
+    let mut bottom = 0.0f32;
+    for cell in &table.cells {
+        let Some((_, r)) = cell.coords() else {
+            continue;
+        };
+        if r + cell.row_span.max(1) < rows {
+            continue;
+        }
+        if cell
+            .bottom_edge_stroke_color
+            .as_deref()
+            .is_some_and(is_none_swatch_id)
+        {
+            continue;
+        }
+        bottom = bottom.max(
+            cell.bottom_edge_stroke_weight
+                .unwrap_or(DEFAULT_CELL_EDGE_WEIGHT)
+                .max(0.0),
+        );
+    }
+    bottom * 0.5
+}
+
+/// Half the weight of the stroke under row `r`: the widest bottom edge of
+/// the cells that end in it (a cell's default edge is 1 pt), none when
+/// those edges are `Swatch/None`.
+fn row_bottom_half(table: &paged_model::Table, r: usize) -> f32 {
+    let mut bottom = 0.0f32;
+    for cell in &table.cells {
+        let Some((_, row)) = cell.coords() else {
+            continue;
+        };
+        if (row + cell.row_span.max(1)) as usize != r + 1 {
+            continue;
+        }
+        if cell
+            .bottom_edge_stroke_color
+            .as_deref()
+            .is_some_and(is_none_swatch_id)
+        {
+            continue;
+        }
+        bottom = bottom.max(
+            cell.bottom_edge_stroke_weight
+                .unwrap_or(DEFAULT_CELL_EDGE_WEIGHT)
+                .max(0.0),
+        );
+    }
+    bottom * 0.5
 }
 
 fn covered_grid_positions(table: &paged_model::Table) -> std::collections::HashSet<(u32, u32)> {
@@ -1886,293 +2077,26 @@ fn emit_table_vertical_edge(
     }
 }
 
-/// Phase 5 — emit a nested table inside a cell's content area.
-///
-/// Unlike [`emit_table_into_chain`] this version doesn't thread the
-/// table across frames or replay header/footer rows — a nested table
-/// lives entirely inside ONE outer cell, so all the chain-aware
-/// machinery is unnecessary. The simpler shape:
-///
-/// 1. Compute column widths from `table.columns`. Scale to fit
-///    `max_width_pt` if the declared widths exceed it.
-/// 2. Pre-measure every cell to derive content-driven row heights.
-/// 3. Walk cells; for each, compute its rect within the table, then
-///    route paragraphs through `emit_cell_paragraph` at the cell's
-///    inner origin (text inset applied). A 0.5pt black border
-///    outlines each cell so the nested table reads visibly even
-///    without a fully resolved cell style.
-///
-/// Returns the total height consumed in pt so callers can advance
-/// the cell-paragraph cursor by it (mirrors `emit_cell_paragraph`'s
-/// return convention).
-///
-/// Honoured today:
-/// - per-column `SingleColumnWidth` (with proportional scaling when
-///   declared widths overflow `max_width_pt`),
-/// - per-row `SingleRowHeight` / `MinimumHeight` / `MaximumHeight`
-///   (max-row growth from cell content),
-/// - per-cell `text_top_inset` / `text_left_inset` / ... (text
-///   insets honored at emit),
-/// - all cell paragraphs (including their nested character styles,
-///   tab leaders, conditional text, etc. — by routing through the
-///   existing `emit_cell_paragraph`).
-///
-/// Deferred:
-/// - cell fill / cell border styling from `AppliedCellStyle` (uses
-///   a simple 0.5pt grid for visibility),
-/// - row/column spans (each cell occupies one row × one column;
-///   spans get clamped to 1),
-/// - diagonals, alternating-row fills, custom strokes,
-/// - RowSpan / ColumnSpan layout (treats every cell as 1×1).
-#[allow(clippy::too_many_arguments)]
-fn emit_nested_table_inline(
-    em: &mut StoryEmitter,
-    table: &paged_model::Table,
-    origin_x: f32,
-    origin_y: f32,
-    max_width_pt: f32,
-    target_page: usize,
-    pages: &mut [BuiltPage],
-    total_stats: &mut PipelineStats,
-) -> f32 {
-    if table.cells.is_empty() || table.columns.is_empty() {
+/// The height a table nested in a cell takes there: its grown rows and
+/// its outer strokes, exactly what [`emit_nested_table`] draws (ADR 176).
+/// Its columns keep their declared widths, as InDesign keeps them, so a
+/// cell's width does not enter.
+fn measure_nested_table_height(em: &StoryEmitter, table: &paged_model::Table) -> f32 {
+    if table.cells.is_empty() || table.rows.is_empty() {
         return 0.0;
     }
-    let declared_widths: Vec<f32> = table
-        .columns
-        .iter()
-        .map(|c| c.single_column_width.unwrap_or(0.0).max(0.0))
-        .collect();
-    let declared_total: f32 = declared_widths.iter().sum();
-    // Scale columns to fit `max_width_pt` when the declared widths
-    // exceed it. Equal-width fallback when all declared widths are
-    // zero (a degenerate IDML that didn't carry SingleColumnWidth).
-    let col_widths: Vec<f32> = if declared_total <= 0.0 {
-        let n = declared_widths.len() as f32;
-        vec![max_width_pt / n; declared_widths.len()]
-    } else if declared_total > max_width_pt && max_width_pt > 0.0 {
-        let scale = max_width_pt / declared_total;
-        declared_widths.iter().map(|w| w * scale).collect()
-    } else {
-        declared_widths
-    };
-    let mut col_x: Vec<f32> = Vec::with_capacity(col_widths.len() + 1);
-    let mut acc = 0.0f32;
-    col_x.push(0.0);
-    for w in &col_widths {
-        acc += *w;
-        col_x.push(acc);
+    let mut col_x = vec![0.0f32];
+    for c in &table.columns {
+        col_x.push(col_x.last().copied().unwrap_or(0.0) + c.single_column_width.unwrap_or(0.0));
     }
-    let total_rows = table.rows.len();
-    if total_rows == 0 {
-        return 0.0;
-    }
-    // Initial row heights from the IDML's row attributes (the same
-    // max-of-SingleRowHeight-MinimumHeight default as the chain
-    // emitter uses).
-    let mut row_heights: Vec<f32> = table.rows.iter().map(row_floor_pt).collect();
-    // Pre-measure every cell so row heights can grow to fit content.
-    // Spans are clamped to 1 here — proper span layout is a follow-up.
-    let mut blocks: Vec<Option<CellBlock>> = Vec::with_capacity(table.cells.len());
-    for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else {
-            blocks.push(None);
-            continue;
-        };
-        let (cu, ru) = (c as usize, r as usize);
-        if cu >= col_widths.len() || ru >= total_rows {
-            blocks.push(None);
-            continue;
-        }
-        let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let style = cell
-            .applied_cell_style
-            .as_deref()
-            .filter(|id| !is_none_style_id(id))
-            .map(|id| em.document.styles.resolve_cell(id))
-            .unwrap_or_default();
-        let block = plan_cell_block(
-            em,
-            &cell.paragraphs,
-            inner_w,
-            CellFirstBaseline::of(cell, &style),
-        );
-        let insets = cell.text_top_inset + cell.text_bottom_inset;
-        let clamp = table.rows.get(ru).map_or(f32::INFINITY, row_cap_pt);
-        let required = block.fitted(clamp - insets).0 + insets;
-        row_heights[ru] = row_heights[ru].max(required).min(clamp);
-        blocks.push(Some(block));
-    }
-    let mut row_y: Vec<f32> = Vec::with_capacity(total_rows + 1);
-    let mut yacc = 0.0f32;
-    row_y.push(0.0);
-    for h in &row_heights {
-        yacc += *h;
-        row_y.push(yacc);
-    }
-    let table_h = *row_y.last().unwrap_or(&0.0);
-    let total_w = *col_x.last().unwrap_or(&0.0);
-
-    // Emit a thin border grid as a placeholder so the nested table
-    // is visible even without a resolved cell style. Replaces the
-    // styled-stroke pass the chain emitter does — that's the
-    // follow-up.
-    const GRID_W: f32 = 0.5;
-    let grid_paint = paged_compose::Paint::Solid(paged_compose::Color {
-        r: 0.0,
-        g: 0.0,
-        b: 0.0,
-        a: 1.0,
-    });
-    // Horizontal lines (top of each row + bottom of last row).
-    for &y in &row_y {
-        emit_rect(
-            Rect {
-                x: origin_x,
-                y: origin_y + y - GRID_W * 0.5,
-                w: total_w,
-                h: GRID_W,
-            },
-            grid_paint,
-            &mut pages[target_page].list,
-        );
-    }
-    // Vertical lines (left of each column + right of last column).
-    for &x in &col_x {
-        emit_rect(
-            Rect {
-                x: origin_x + x - GRID_W * 0.5,
-                y: origin_y,
-                w: GRID_W,
-                h: table_h,
-            },
-            grid_paint,
-            &mut pages[target_page].list,
-        );
-    }
-
-    // Emit cell content.
-    for (cell, block) in table.cells.iter().zip(&blocks) {
-        let (Some((c, r)), Some(block)) = (cell.coords(), block.as_ref()) else {
-            continue;
-        };
-        let (cu, ru) = (c as usize, r as usize);
-        let cell_x_pt = origin_x + col_x[cu];
-        let cell_y_pt = origin_y + row_y[ru];
-        let cell_w_pt = col_widths[cu];
-        let cell_h_pt = row_heights[ru];
-        let inner_left = cell_x_pt + cell.text_left_inset;
-        let inner_top = cell_y_pt + cell.text_top_inset;
-        let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let inner_h = (cell_h_pt - cell.text_top_inset - cell.text_bottom_inset).max(0.0);
-        for item in block.items.iter().take(block.fitting_items(inner_h)) {
-            match item {
-                // Double-nested table — recurse.
-                CellItem::Table { table, top, .. } => {
-                    emit_nested_table_inline(
-                        em,
-                        table,
-                        inner_left,
-                        inner_top + top,
-                        inner_w,
-                        target_page,
-                        pages,
-                        total_stats,
-                    );
-                }
-                // W1.13 defer — nested-table cells pass `None`: text inside
-                // a table that is itself nested in a cell is laid out and
-                // rendered, but not separately caret-addressable. The wire
-                // address only reaches top-level tables (`cell_rects` are
-                // likewise only built for the outer table). Dated defer:
-                // 2026-06-07 — nested-cell text editing.
-                CellItem::Text {
-                    paragraph,
-                    origin,
-                    by_leading,
-                    ..
-                } => emit_cell_paragraph(
-                    em,
-                    paragraph,
-                    target_page,
-                    (inner_left, inner_top),
-                    inner_w,
-                    *origin,
-                    pages,
-                    total_stats,
-                    None,
-                    *by_leading,
-                    inner_h - origin,
-                    block.first_baseline,
-                ),
-            }
-        }
-    }
-    table_h
-}
-
-/// Phase 5 — measurement counterpart to [`emit_nested_table_inline`].
-/// Returns the total height a nested table would consume given a
-/// containing column width. Caller uses this in the outer table's
-/// row-height pre-measure pass so a nested table can grow its host
-/// row appropriately.
-///
-/// Heuristic — sums each row's height after applying the
-/// `SingleRowHeight` / `MinimumHeight` default, then growing rows
-/// whose cells host content (or nested-nested tables) measured at
-/// the same per-column inner width the emit pass would see.
-fn measure_nested_table_height(
-    em: &StoryEmitter,
-    table: &paged_model::Table,
-    max_width_pt: f32,
-) -> f32 {
-    if table.cells.is_empty() || table.columns.is_empty() || table.rows.is_empty() {
-        return 0.0;
-    }
-    let declared_widths: Vec<f32> = table
-        .columns
-        .iter()
-        .map(|c| c.single_column_width.unwrap_or(0.0).max(0.0))
-        .collect();
-    let declared_total: f32 = declared_widths.iter().sum();
-    let col_widths: Vec<f32> = if declared_total <= 0.0 {
-        let n = declared_widths.len() as f32;
-        vec![max_width_pt / n; declared_widths.len()]
-    } else if declared_total > max_width_pt && max_width_pt > 0.0 {
-        let scale = max_width_pt / declared_total;
-        declared_widths.iter().map(|w| w * scale).collect()
-    } else {
-        declared_widths
-    };
-    let total_rows = table.rows.len();
-    let mut row_heights: Vec<f32> = table.rows.iter().map(row_floor_pt).collect();
-    for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else {
-            continue;
-        };
-        let (cu, ru) = (c as usize, r as usize);
-        if cu >= col_widths.len() || ru >= total_rows {
-            continue;
-        }
-        let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let style = cell
-            .applied_cell_style
-            .as_deref()
-            .filter(|id| !is_none_style_id(id))
-            .map(|id| em.document.styles.resolve_cell(id))
-            .unwrap_or_default();
-        let block = plan_cell_block(
-            em,
-            &cell.paragraphs,
-            inner_w,
-            CellFirstBaseline::of(cell, &style),
-        );
-        let insets = cell.text_top_inset + cell.text_bottom_inset;
-        let clamp = table.rows.get(ru).map_or(f32::INFINITY, row_cap_pt);
-        let required = block.fitted(clamp - insets).0 + insets;
-        row_heights[ru] = row_heights[ru].max(required).min(clamp);
-    }
-    row_heights.iter().sum()
+    let resolved_table = table
+        .applied_table_style
+        .as_deref()
+        .map(|id| em.document.styles.resolve_table(id))
+        .unwrap_or_default();
+    let covered = covered_grid_positions(table);
+    let (rows, _) = grow_rows(em, table, &col_x, &covered, &resolved_table);
+    outer_border_offsets(table).0 + rows.iter().sum::<f32>() + outer_border_bottom_offset(table)
 }
 
 /// The height a row never goes under: `max(SingleRowHeight,
@@ -2337,7 +2261,7 @@ fn plan_cell_block<'t>(
             .filter(|_| paragraph.runs.is_empty())
         {
             let top = prev_text.map(|(b, after)| b + after).unwrap_or(cursor);
-            let height = measure_nested_table_height(em, table, inner_w);
+            let height = measure_nested_table_height(em, table);
             items.push(CellItem::Table { table, top, height });
             cursor = top + height;
             prev_text = None;

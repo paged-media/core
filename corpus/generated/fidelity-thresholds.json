@@ -367,11 +367,11 @@
       "name": "tables",
       "text_gate": "lines",
       "max_pages_with_pdf": 13,
-      "max_mean_de": 0.215,
+      "max_mean_de": 0.134,
       "max_p99_de": 3.0,
-      "min_ssim": 0.982,
-      "max_ink_mean_de": 47.995,
-      "rationale": "Re-baselined 2026-09-07 after four table fixes: paged-gen writes MinimumHeight/AutoGrow so InDesign lays out the declared row heights; a cell edge with no declared stroke draws InDesign's default 1pt black; and a table's content is inset half its outer border, as InDesign keeps that border inside the frame. Reference re-exported from the changed IDML; all 13 pages gated (was 7). Worst page mean 0.219 / p99 2.457 / SSIM 0.9878 - tightened from 1.1/13.0/0.96, which had made this the loosest fixture in the corpus. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.186 / p99 2.457 / ssim 0.9905 (was 0.219 / 2.457 / 0.9878); re-sized by the rule above. RE-EXPORTED 2026-10-02 (tables-rows): paged-gen now writes a cell's paragraph marks (<Br/>), so InDesign reads p7's and p12's multi-paragraph cells as several paragraphs instead of one run-on line; with the cell row fix p7 went mean 0.076 -> 0.021 and p12 0.126 -> 0.055. The worst page (p2, nested table, mean 0.186 / p99 2.457 / SSIM 0.9905) is unchanged, so the thresholds stay. INK GATED 2026-10-13: worst page ink mean 39.995 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
+      "min_ssim": 0.988,
+      "max_ink_mean_de": 20.0,
+      "rationale": "Re-baselined 2026-09-07 after four table fixes: paged-gen writes MinimumHeight/AutoGrow so InDesign lays out the declared row heights; a cell edge with no declared stroke draws InDesign's default 1pt black; and a table's content is inset half its outer border, as InDesign keeps that border inside the frame. Reference re-exported from the changed IDML; all 13 pages gated (was 7). Worst page mean 0.219 / p99 2.457 / SSIM 0.9878 - tightened from 1.1/13.0/0.96, which had made this the loosest fixture in the corpus. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.186 / p99 2.457 / ssim 0.9905 (was 0.219 / 2.457 / 0.9878); re-sized by the rule above. RE-EXPORTED 2026-10-02 (tables-rows): paged-gen now writes a cell's paragraph marks (<Br/>), so InDesign reads p7's and p12's multi-paragraph cells as several paragraphs instead of one run-on line; with the cell row fix p7 went mean 0.076 -> 0.021 and p12 0.126 -> 0.055. The worst page (p2, nested table, mean 0.186 / p99 2.457 / SSIM 0.9905) is unchanged, so the thresholds stay. INK GATED 2026-10-13: worst page ink mean 39.995 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-17 (ADR 176: a nested table drawn as any table is, with its strokes, fills and spans and its columns at their declared widths): p2, the nested table, 0.186 -> 0.014; worst page now p11 mean 0.112 / p99 2.574 / ssim 0.9938 (p13) / ink 16.663; mean, ssim and ink re-sized by the rule above, p99 kept (worst * 1.20 would loosen it)."
     },
     {
       "name": "tables-overset",
@@ -690,6 +690,26 @@
       "min_ssim": 0.985,
       "max_ink_mean_de": 78.934,
       "rationale": "Added 2026-10-17 (ADR 175): a table row's Start Row option, asked of InDesign 20.0.1. Nine cases, each one story holding one table of 20 pt rows (each grows to 20.826 pt with its Open Sans 12 label), threaded through the start-paragraph fixture's four-page chain (a two-column frame and a one-column frame on page 1, one frame on each of pages 2-4), every case starting on an odd page: R04 Anywhere / NextColumn / NextFrame / NextPage / NextOddPage / NextEvenPage, NextPage on the story's first row, NextColumn on a row that already opens column two, and a header over a row moved to the next frame. InDesign moves the row and every row after it as it moves a paragraph's first line (StartParagraph), leaves the first row and the row already opening column two where they are, and repeats the header in the target frame; the engine matches every row (table_start_row_pipeline pins each to its frame, from table-start-row-probe with PROBE_IN). Before (the attribute was not read): worst page mean 0.433 / p99 0.0 / ssim 0.9719, and the text gate failed on pages 13-22. With the rule: 0.117 / 0.0 / 0.9902, ink 65.778; sized at worst * 1.20, the p99 at the 0.3 floor, ssim - 0.005, ink worst + ~20%. The text gate is hard: 86 lines on 13 pages match."
+    },
+    {
+      "name": "table-nested",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 6,
+      "max_mean_de": 0.055,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.992,
+      "max_ink_mean_de": 3.033,
+      "rationale": "Added 2026-10-17 (ADR 176): a table nested in a table cell, asked of InDesign 20.0.1. One case per page, a one-cell host table 300 pt wide holding the nested table above a plain host row: a plain 3 x 3 (default strokes), a column span and a row span, cell fills and per-edge strokes (3 pt red, 2 pt blue), a header row, columns narrower than the cell, and columns wider than it (400 pt in 300). InDesign sets a nested table as any table, with its strokes, fills and spans, and keeps its declared column widths past the cell's edge. The engine drew nested tables through a reduced path (a 0.5 pt placeholder grid, no fills, strokes or spans, columns scaled to the cell): worst page mean 0.751 / p99 49.0 / ssim 0.9642. Drawn by the table emitter itself at a fixed origin: 0.045 / 0.0 / 0.9978, ink 2.528 (table_nested_pipeline pins the host row and column offsets to InDesign's PDF). Sized at worst * 1.20, the p99 at the 0.3 floor, ssim - 0.005, ink worst + ~20%. The text gate is hard: 62 lines on 6 pages match."
+    },
+    {
+      "name": "table-fit",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 6,
+      "max_mean_de": 0.01,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9949,
+      "max_ink_mean_de": 1.416,
+      "rationale": "Added 2026-10-17 (ADR 177): how many table rows a frame holds at the edge, asked of InDesign 20.0.1 (table-fit-probe, then this fixture opened with PROBE_IN). Six pages, each a frame threaded to a second one, holding eight fixed 20 pt rows with 1 pt strokes: a plain frame of 120.9 and 121 pt, a 4 pt bottom inset at 124.9 and 125 pt, a 1 pt centred frame stroke at 121.9 and 122 pt. InDesign sets 5, 6, 5, 6, 5, 6 rows in the first frame: a frame holds its rows when its text area (above its bottom inset, inside its stroke's share) holds them and half the strokes above and below them. The engine measured against the whole frame and left out the stroke under the last row: worst page mean 0.069 / ssim 0.9968 (6 rows in the 120.9, 124.9 and 121.9 pt frames). With the rule: 0.008 / 0.0 / 0.9999, ink 1.18; table_fit_pipeline counts each frame's rows. Sized at worst * 1.20 (rounded up), the p99 at the 0.3 floor, ssim - 0.005, ink worst + ~20%. The text gate is hard: 54 lines on 6 pages match."
     },
     {
       "name": "table-cell-tints",
