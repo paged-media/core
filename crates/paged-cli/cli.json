@@ -4143,6 +4143,16 @@
             "deleteHyperlink",
             "editHyperlink",
             "updateTableOfContents",
+            "generateIndex",
+            "updateCrossReferences",
+            "insertNote",
+            "editNote",
+            "deleteNote",
+            "convertNoteToText",
+            "createBookmark",
+            "deleteBookmark",
+            "renameBookmark",
+            "moveBookmark",
             "setFieldValue",
             "placeImage",
             "replaceImageBytes",
@@ -5246,5 +5256,5 @@
       "subcommands": []
     }
   ],
-  "protocol": 71
+  "protocol": 72
 }

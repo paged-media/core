@@ -1109,7 +1109,7 @@ pub enum Mutation {
         #[serde(default)]
         page: Option<PageId>,
     },
-    /// v73 — insert a footnote (ADR 163): its reference at story char
+    /// v0.71.13 — insert a footnote (ADR 163): its reference at story char
     /// `offset` (contiguous char offsets, the `InsertHyperlink` address
     /// space) and the note, whose text is its number, the document's
     /// separator, then `text`. The model mints the note's id and reports
@@ -1124,14 +1124,14 @@ pub enum Mutation {
         #[serde(default)]
         text: String,
     },
-    /// v73 — delete a footnote: its reference and the note, by the note's
+    /// v0.71.13 — delete a footnote: its reference and the note, by the note's
     /// id (`Footnote.self_id`). Undoable in one step: undo puts the note
     /// back as it was, its text and formatting included.
     DeleteFootnote {
         story_id: String,
         footnote_id: String,
     },
-    /// v73 — delete a hyperlink by its `Hyperlink` `Self` id (ADR 164),
+    /// v0.71.13 — delete a hyperlink by its `Hyperlink` `Self` id (ADR 164),
     /// from any origin: its text stops linking, the link goes, and so does
     /// its URL or page destination when nothing else points at it. A text
     /// destination stays (it is an anchor in its story). Undoable in one
@@ -1139,7 +1139,7 @@ pub enum Mutation {
     DeleteHyperlink {
         hyperlink_id: String,
     },
-    /// v73 — edit a hyperlink (ADR 164): `name` renames it (empty clears
+    /// v0.71.13 — edit a hyperlink (ADR 164): `name` renames it (empty clears
     /// it); `page` (wins) or `url` sends it somewhere new. Its own
     /// destination of that kind changes in place; a shared one, a text
     /// anchor or one of the other kind stays, and the link moves to a new
@@ -1154,13 +1154,109 @@ pub enum Mutation {
         #[serde(default)]
         page: Option<PageId>,
     },
-    /// v73 — Update Table of Contents (ADR 165): rewrite TOC story
+    /// v0.71.13 — Update Table of Contents (ADR 165): rewrite TOC story
     /// `story_id` (one whose story or frame names a TOC style) from its
     /// style over the current layout, as InDesign writes it: the title,
     /// then one paragraph per heading with its page number. Until then the
     /// story prints the text it holds. Undoable in one step.
     UpdateTableOfContents {
         story_id: String,
+    },
+    /// v72 — Generate Index (ADR 168): write the document's index into
+    /// story `story_id` (its text replaced, as InDesign's Replace Existing
+    /// Index does) from its topics and page references over the current
+    /// layout, as InDesign writes one: the title, a heading per letter,
+    /// each topic with its pages and cross-references. Index styles the
+    /// document lacks are created, as InDesign creates them. Undoable in
+    /// one step.
+    GenerateIndex {
+        story_id: String,
+    },
+    /// Update Cross-References (ADR 169): rewrite cross-reference source
+    /// `source_id`'s text (every source's when `None`, as Update All
+    /// Cross-References does) from its format and its destination
+    /// paragraph, as InDesign writes it. The page number stays the live
+    /// `XRefPageNumber` it always prints. Undoable in one step.
+    UpdateCrossReferences {
+        #[serde(default)]
+        source_id: Option<String>,
+    },
+    /// Insert an editorial note (ADR 172): its place at story char
+    /// `offset` (the `InsertFootnote` address space) — one character of the
+    /// story, as InDesign keeps one — and its `text`, paragraphs separated
+    /// by U+000D. `user` and `date` are what InDesign writes as `UserName`
+    /// and `CreationDate` (`2026-10-16T09:59:49`); the engine reads no
+    /// clock, so the host passes them. The model mints the note's id and
+    /// reports it in the reply. Undoable in one step.
+    InsertNote {
+        story_id: String,
+        offset: u32,
+        /// The paragraph `offset` stands in; `offset` is clamped into it.
+        #[serde(default)]
+        paragraph: Option<u32>,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        user: Option<String>,
+        #[serde(default)]
+        date: Option<String>,
+    },
+    /// Rewrite note `note_id`'s text (ADR 172); `date` becomes its
+    /// `ModificationDate`. Undoable in one step.
+    EditNote {
+        note_id: String,
+        text: String,
+        #[serde(default)]
+        date: Option<String>,
+    },
+    /// Delete note `note_id` and its place in the text (ADR 172).
+    /// Undoable in one step: undo puts it back as it was.
+    DeleteNote {
+        note_id: String,
+    },
+    /// Convert to Text (ADR 172): note `note_id`'s place becomes a space
+    /// and the note's text, its paragraphs the story's, as InDesign 20.0.1
+    /// converts one. Undoable in one step.
+    ConvertNoteToText {
+        note_id: String,
+    },
+    /// New Bookmark (ADR 173): bookmark `name` to page `page`, through a
+    /// page destination of its own as InDesign makes one, or else to the
+    /// existing destination `destination` (a text anchor, a page
+    /// destination); under bookmark `parent` (the top level when absent) at
+    /// `index` among its children (the end when absent). The model mints
+    /// the bookmark's id and reports it in the reply. Undoable in one step.
+    CreateBookmark {
+        name: String,
+        #[serde(default)]
+        page: Option<PageId>,
+        #[serde(default)]
+        destination: Option<String>,
+        #[serde(default)]
+        parent: Option<String>,
+        #[serde(default)]
+        index: Option<u32>,
+    },
+    /// Delete bookmark `bookmark_id` (ADR 173) and the bookmarks under it,
+    /// as InDesign does, and the page destinations nothing else goes to; a
+    /// text destination stays. Undoable in one step.
+    DeleteBookmark {
+        bookmark_id: String,
+    },
+    /// Rename bookmark `bookmark_id` (ADR 173). Undoable in one step.
+    RenameBookmark {
+        bookmark_id: String,
+        name: String,
+    },
+    /// Move bookmark `bookmark_id` with the bookmarks under it (ADR 173):
+    /// under `parent` (the top level when absent) at `index` among its
+    /// children (the end when absent). Undoable in one step.
+    MoveBookmark {
+        bookmark_id: String,
+        #[serde(default)]
+        parent: Option<String>,
+        #[serde(default)]
+        index: Option<u32>,
     },
     /// v43 (D-01) — update the cached display value of the placeholder
     /// field containing the story char `offset` (offsets come fresh
@@ -2350,6 +2446,16 @@ mutation_vocabulary! {
     DeleteHyperlink,
     EditHyperlink,
     UpdateTableOfContents,
+    GenerateIndex,
+    UpdateCrossReferences,
+    InsertNote,
+    EditNote,
+    DeleteNote,
+    ConvertNoteToText,
+    CreateBookmark,
+    DeleteBookmark,
+    RenameBookmark,
+    MoveBookmark,
     SetFieldValue,
     PlaceImage,
     ReplaceImageBytes,

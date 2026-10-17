@@ -26,6 +26,7 @@ pub mod corners;
 pub mod docx_pagination;
 pub mod effects;
 pub mod effects_attrs;
+pub mod endnotes;
 pub mod footnote_columns;
 pub mod footnote_numbering;
 pub mod footnote_references;
@@ -39,6 +40,7 @@ pub mod gradients;
 pub mod hard_hyphen;
 pub mod image_clipping;
 pub mod images;
+pub mod index;
 pub mod inline_objects;
 pub mod justification;
 pub mod justified_breaks;
@@ -61,6 +63,7 @@ pub mod mixed_leading;
 pub mod navigation;
 pub mod nested_groups;
 pub mod nested_styles;
+pub mod notes;
 pub mod numbering;
 pub mod numbering_multilevel;
 pub mod object_style_frames;
@@ -104,6 +107,7 @@ pub mod toc;
 pub mod transparency;
 pub mod transparency_targets;
 pub mod variables;
+pub mod xref;
 
 /// Every built-in sample, by CLI name.
 ///
@@ -209,6 +213,10 @@ pub const SAMPLES: &[&str] = &[
     "footnote-split",
     "footnote-nosplit",
     "toc",
+    "index",
+    "xref",
+    "endnotes",
+    "notes",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -293,6 +301,10 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "gradient-geometry" => gradient_geometry::build(),
         "tints" => tints::build(),
         "toc" => toc::build(),
+        "index" => index::build(),
+        "xref" => xref::build(),
+        "endnotes" => endnotes::build(),
+        "notes" => notes::build(),
         "table-cell-baseline" => table_cell_baseline::build(),
         "table-cell-tints" => table_cell_tints::build(),
         "table-inline-text" => table_inline_text::build(),
@@ -335,7 +347,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            92,
+            96,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

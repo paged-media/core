@@ -20,6 +20,6 @@ serde = { workspace = true }
 blake3 = "1"
 
 [dev-dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "63346fd13766fcc03d4468c027996709c0fd088c" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "7309290f66192876036090d2e980e99bced12a16" }
 serde_json = "1"
 zip = { workspace = true }

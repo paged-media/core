@@ -108,7 +108,7 @@ pub(crate) use blend_shadow::{
     push_blend_group, push_target_group, resolve_frame_shadow, shadow_group_blend, target_opacity,
 };
 use build_engine::*;
-pub use build_engine::{build_index_paragraphs, toc_paragraphs};
+pub use build_engine::{index_paragraphs, toc_paragraphs};
 pub(crate) use color_paint::{apply_fill_tint_ctx, object_tint, stroke_for};
 use color_paint::{build_cmyk_transform, CmykTransformRef};
 use color_paint::{
@@ -142,6 +142,7 @@ pub use metrics::*;
 pub use nested_styles::*;
 #[cfg(test)]
 use numbering::list_prefix;
+pub use numbering::story_list_labels;
 use numbering::{bullet_marker_character_style, list_prefix_with_levels, marker_run_attrs};
 #[cfg(test)]
 use numbering::{format_number, substitute_numbering_expression};
@@ -1211,6 +1212,8 @@ pub enum GeneratedKind {
     TextVariable,
     /// The placeholder an inline anchored object takes in its line.
     AnchoredObject,
+    /// An editorial note's place (ADR 172), which prints nothing.
+    Note,
 }
 
 /// A [`GeneratedSpan`] before it is cut to a line: a byte range of its
@@ -1320,6 +1323,10 @@ struct PostLayoutCtx {
     /// Story `<Self>` id (and any text-anchor id that maps to a story)
     /// → flat 0-based page index of that story's first laid-out line.
     story_page: HashMap<String, u32>,
+    /// Cross-reference source `<Self>` → the flat page index its
+    /// destination paragraph was laid out on (ADR 169): what the source's
+    /// `XRefPageNumber` prints, live, as InDesign prints it.
+    xref_page: HashMap<String, usize>,
 }
 
 /// Build one `BuiltPage` per `<Page>` in the document. Each page's
@@ -1518,7 +1525,12 @@ fn build_document_fixed(
                 paged_model::HyperlinkDestinationKind::TextAnchor(_)
             )
         });
-    let single = !has_running_header && !has_text_anchor_dest;
+    // ADR 169 — a cross-reference prints its destination's page live.
+    let has_xref_page = dm
+        .text_variables
+        .iter()
+        .any(|v| v.variable_type.as_deref() == Some("XrefPageNumberType"));
+    let single = !has_running_header && !has_text_anchor_dest && !has_xref_page;
     let first = build_document_inner(document, options, None, adopt && single)?;
     if single {
         return Ok(first);
@@ -1705,7 +1717,55 @@ fn build_post_layout_ctx(document: &Document, first: &BuiltDocument) -> PostLayo
     PostLayoutCtx {
         running_headers,
         story_page,
+        xref_page: xref_pages(document, first),
     }
+}
+
+/// ADR 169 — each cross-reference source's destination page in `first`:
+/// source → its hyperlink → the destination's paragraph (a paragraph
+/// destination or a text anchor standing in a story) → the page that
+/// paragraph's first line was laid out on.
+fn xref_pages(document: &Document, first: &BuiltDocument) -> HashMap<String, usize> {
+    let mut out: HashMap<String, usize> = HashMap::new();
+    let sources: Vec<&str> = document
+        .stories
+        .iter()
+        .flat_map(|s| s.story.cross_reference_sources.iter())
+        .map(|x| x.self_id.as_str())
+        .collect();
+    if sources.is_empty() {
+        return out;
+    }
+    let laid_out = first.paragraph_pages();
+    let destinations: HashMap<&str, (&str, u32)> = document
+        .stories
+        .iter()
+        .flat_map(|s| {
+            s.story
+                .destinations
+                .iter()
+                .map(move |d| (d.self_id.as_str(), (s.self_id.as_str(), d.paragraph)))
+        })
+        .collect();
+    for source in sources {
+        let dest = document
+            .designmap
+            .hyperlinks
+            .iter()
+            .find(|h| h.source.as_deref() == Some(source))
+            .and_then(|h| h.destination.as_deref());
+        let page = dest
+            .and_then(|d| destinations.get(d))
+            .and_then(|(story, para)| {
+                laid_out
+                    .get(*story)
+                    .and_then(|m| m.get(&(*para as usize)).copied())
+            });
+        if let Some(page) = page {
+            out.insert(source.to_string(), page);
+        }
+    }
+    out
 }
 
 /// Single-page convenience: union every page's bounds and emit all

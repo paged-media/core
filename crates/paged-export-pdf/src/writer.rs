@@ -336,10 +336,23 @@ impl DocState {
             None
         };
 
+        // ADR 171 — the bookmarks, as `/Outlines`.
+        let first_page = input.options.page_range.map_or(0, |(from, _)| from);
+        let outlines_ref = write_outlines(
+            &mut self.pdf,
+            &mut self.refs,
+            &input.options.bookmarks,
+            &kids,
+            first_page,
+        );
+
         // Catalog.
         {
             let mut catalog = self.pdf.catalog(self.catalog_ref);
             catalog.pages(self.page_tree_ref);
+            if let Some(o) = outlines_ref {
+                catalog.outlines(o);
+            }
             if let Some(oi) = output_intent_ref {
                 catalog.insert(Name(b"OutputIntents")).array().item(oi);
             }
@@ -371,6 +384,94 @@ impl DocState {
         }
         Ok(self.pdf.finish())
     }
+}
+
+/// Write `bookmarks` as the document outline (ADR 171): every item nested
+/// under the nearest earlier item one level up, its `/Count` its
+/// descendants (all open, as InDesign writes them), its destination its
+/// page fitted (`/Fit`). An item whose page is not exported is left out
+/// with its descendants. `None` when nothing is written.
+fn write_outlines(
+    pdf: &mut Pdf,
+    refs: &mut RefAllocator,
+    bookmarks: &[crate::PdfBookmark],
+    kids: &[Ref],
+    first_page: usize,
+) -> Option<Ref> {
+    // The items that land on an exported page, with their parent (an
+    // index into `items`), depth-first in document order.
+    let mut items: Vec<(&crate::PdfBookmark, Option<usize>, Ref)> = Vec::new();
+    let mut stack: Vec<(u32, usize)> = Vec::new();
+    let mut skip_below: Option<u32> = None;
+    for b in bookmarks {
+        if skip_below.is_some_and(|d| b.depth > d) {
+            continue;
+        }
+        skip_below = None;
+        let page = b
+            .page_index
+            .checked_sub(first_page)
+            .and_then(|i| kids.get(i));
+        if page.is_none() {
+            skip_below = Some(b.depth);
+            continue;
+        }
+        while stack.last().is_some_and(|(d, _)| *d >= b.depth) {
+            stack.pop();
+        }
+        let parent = stack.last().map(|(_, i)| *i);
+        items.push((b, parent, refs.alloc()));
+        stack.push((b.depth, items.len() - 1));
+    }
+    if items.is_empty() {
+        return None;
+    }
+    let root = refs.alloc();
+    let children = |parent: Option<usize>| -> Vec<usize> {
+        (0..items.len()).filter(|&i| items[i].1 == parent).collect()
+    };
+    let descendants = |i: usize| -> i32 {
+        let mut n = 0;
+        let mut open = vec![i];
+        while let Some(at) = open.pop() {
+            for (k, item) in items.iter().enumerate() {
+                if item.1 == Some(at) {
+                    n += 1;
+                    open.push(k);
+                }
+            }
+        }
+        n
+    };
+    let top = children(None);
+    {
+        let mut outline = pdf.outline(root);
+        outline.first(items[top[0]].2);
+        outline.last(items[*top.last().expect("non-empty")].2);
+        outline.count(items.len() as i32);
+    }
+    for (i, (b, parent, id)) in items.iter().enumerate() {
+        let siblings = children(*parent);
+        let at = siblings.iter().position(|&s| s == i).expect("listed");
+        let kids_of = children(Some(i));
+        let page = kids[b.page_index - first_page];
+        let mut item = pdf.outline_item(*id);
+        item.title(pdf_writer::TextStr(&b.title));
+        item.parent(parent.map_or(root, |p| items[p].2));
+        if at > 0 {
+            item.prev(items[siblings[at - 1]].2);
+        }
+        if let Some(next) = siblings.get(at + 1) {
+            item.next(items[*next].2);
+        }
+        if let (Some(first), Some(last)) = (kids_of.first(), kids_of.last()) {
+            item.first(items[*first].2);
+            item.last(items[*last].2);
+            item.count(descendants(i));
+        }
+        item.dest().page(page).fit();
+    }
+    Some(root)
 }
 
 #[cfg(test)]

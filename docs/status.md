@@ -1,8 +1,9 @@
 # Status
 
-What the engine ships and what it does not, read from the code of the protocol-71 batch
-(`PROTOCOL_VERSION` 71: the object model — one address grammar and typed property schemas —
-on top of `v0.70.0`, the presentation batch and the platform doors for plugin content). This page stays
+What the engine ships and what it does not, read from the code of the protocol-72 batch
+(`PROTOCOL_VERSION` 72: generated text, editorial notes and bookmarks over the wire — Generate
+Index, Update Cross-References, notes, bookmark editing and PDF bookmarks — on top of protocol
+71, the object model: one address grammar and typed property schemas). This page stays
 at the level of the engine and its surfaces; it does not list which document constructs are
 rendered. How the parts fit is in [`architecture.md`](architecture.md).
 
@@ -15,7 +16,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `NewBlankDocument` and `paged new` make an empty document.
 - **Render.** One display list per page, drawn on the CPU (`paged render`, snapshots) or
   with Vello on WebGPU (`presentFrame` in the editor wasm, `ViewerSession` in the viewer).
-- **Edit.** 135 mutation operations over the wire, batches that are atomic and cost one
+- **Edit.** 137 mutation operations over the wire, batches that are atomic and cost one
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
 - **Locks and deletes follow InDesign.** A locked item, and the content of a locked container,
   is not moved, resized, reshaped, restacked or deleted: the operation is refused with
@@ -60,12 +61,33 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   and remove a note and its reference, and a text delete over a reference takes its note
   ([ADR 163](adr/163-footnotes-inserted-and-deleted.md)). `deleteHyperlink` and `editHyperlink`
   address any link, an InDesign document's own included, by its id; an edited link keeps its
-  appearance through a save ([ADR 164](adr/164-hyperlinks-deleted-and-edited.md), protocol 73).
+  appearance through a save ([ADR 164](adr/164-hyperlinks-deleted-and-edited.md), `v0.71.13`).
 - **Update Table of Contents.** A TOC story prints what it holds, as InDesign does; an empty one
   prints nothing. `updateTableOfContents` rewrites it over the current layout as InDesign writes
   one: the title, then each heading with its page number after or before it in its own character
   style. TOC styles read in InDesign's spelling ([ADR 165](adr/165-update-table-of-contents.md),
-  protocol 73). The hidden links and bookmarks InDesign adds to the entries are not written yet.
+  `v0.71.13`). The hidden links and bookmarks InDesign adds to the entries are not written yet.
+- **Generate Index.** `generateIndex` writes the document's index into a story as InDesign writes
+  one: the title, a heading per letter, each topic with its pages and See references, subtopics at
+  level 2, and creates the index styles a document lacks. Topics, page references and
+  `IndexOptions` read in InDesign's spelling ([ADR 168](adr/168-generate-index.md), protocol 72).
+  Run-in format, page ranges and levels 3 and 4 are not written yet.
+- **Cross-references.** A reference prints its destination's page live, as InDesign does, and
+  `updateCrossReferences` rewrites its text from its format (full paragraph with its list number,
+  paragraph text, number, anchor name) as InDesign writes it. Formats, sources and paragraph
+  destinations read in InDesign's spelling ([ADR 169](adr/169-update-cross-references.md)).
+- **Endnotes and PDF bookmarks.** Endnote references and the endnote story's numbers print as
+  InDesign numbers them, and its endnote frame is placed ([ADR 170](adr/170-endnotes-as-indesign-writes-them.md));
+  no endnote op yet. PDF export writes the document's bookmarks as a nested outline when asked
+  ([ADR 171](adr/171-pdf-bookmarks.md)).
+- **Editorial notes.** A `<Note>` is read as InDesign keeps it, one character of the text that
+  prints nothing, with its text, author and dates (`documentCollection:notes`); `insertNote`,
+  `editNote`, `deleteNote` and `convertNoteToText` edit them, and they save as IDML
+  ([ADR 172](adr/172-editorial-notes.md)).
+- **Bookmarks edited.** `createBookmark` (to a page through a page destination of its own, or to
+  a destination), `renameBookmark`, `moveBookmark` (nesting and order) and `deleteBookmark` (with
+  its children and the page destinations nothing else goes to) edit the tree as InDesign does,
+  and it saves as InDesign reads it back ([ADR 173](adr/173-bookmarks-edited.md)).
 - **One object model.** Every object has an address (`doc`, `page:#2`, `swatch:Color/Red`,
   `style:object/<id>`, `cell:<table>/0,1`, `textVariable:<id>`, …) and selectors find them
   (`page:#3 > frame[name="price"]`, `RequestQuery`, `paged.query`, `paged query`)

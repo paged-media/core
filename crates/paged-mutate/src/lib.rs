@@ -3029,6 +3029,7 @@ mod tests {
             story_direction: None,
             applied_toc_style: None,
             grow: None,
+            ..Story::default()
         };
 
         Document {
@@ -3206,7 +3207,7 @@ mod tests {
             .unwrap();
     }
 
-    /// v73 (ADR 164) — a deleted link takes its own destination with it,
+    /// v0.71.13 (ADR 164) — a deleted link takes its own destination with it,
     /// leaves a shared one and a text anchor, and undo puts back exactly
     /// what was there.
     #[test]
@@ -3285,7 +3286,7 @@ mod tests {
         ));
     }
 
-    /// v73 (ADR 164) — a new URL rewrites the link's own destination in
+    /// v0.71.13 (ADR 164) — a new URL rewrites the link's own destination in
     /// place; with the destination shared, the link moves to a new one and
     /// the shared one stays. Undo restores each exactly.
     #[test]

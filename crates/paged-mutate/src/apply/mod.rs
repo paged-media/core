@@ -419,6 +419,64 @@ pub(crate) fn apply_inner(
             story_id,
             footnote_id,
         } => footnote::apply_remove_footnote(doc, story_id, footnote_id),
+        Operation::InsertNote {
+            story_id,
+            offset,
+            paragraph,
+            note_id,
+            text,
+            user,
+            date,
+            restore,
+        } => note::apply_insert_note(
+            doc,
+            story_id,
+            *offset,
+            *paragraph,
+            note_id,
+            note::NewNote {
+                text,
+                user: user.as_deref(),
+                date: date.as_deref(),
+            },
+            restore.as_deref(),
+        ),
+        Operation::EditNote {
+            note_id,
+            text,
+            modification_date,
+        } => note::apply_edit_note(doc, note_id, text, modification_date.as_deref()),
+        Operation::DeleteNote { note_id } => note::apply_delete_note(doc, note_id),
+        Operation::CreateBookmark {
+            bookmark_id,
+            name,
+            parent,
+            index,
+            destination,
+            page,
+            dest_id,
+        } => bookmark::apply_create_bookmark(
+            doc,
+            bookmark_id,
+            name,
+            parent.as_deref(),
+            *index,
+            destination.as_deref(),
+            page.as_deref(),
+            dest_id,
+        ),
+        Operation::DeleteBookmark { bookmark_id } => {
+            bookmark::apply_delete_bookmark(doc, bookmark_id)
+        }
+        Operation::RenameBookmark { bookmark_id, name } => {
+            bookmark::apply_rename_bookmark(doc, bookmark_id, name)
+        }
+        Operation::MoveBookmark {
+            bookmark_id,
+            parent,
+            index,
+        } => bookmark::apply_move_bookmark(doc, bookmark_id, parent.as_deref(), *index),
+        Operation::RestoreBookmarks { state } => bookmark::apply_restore_bookmarks(doc, state),
         Operation::InsertHyperlink {
             story_id,
             start,
@@ -963,6 +1021,7 @@ mod character;
 mod conditions;
 mod duplicate_nodes;
 pub use duplicate_nodes::{duplicate_demand, duplicate_roots, DuplicateDemand};
+mod bookmark;
 mod duplicate_page;
 mod flow;
 mod footnote;
@@ -973,6 +1032,7 @@ mod hyperlink_edit;
 mod insert_node;
 mod layer;
 mod lock;
+mod note;
 /// ADR 132 — model → wire-spec readers, for the `Set` resolver: a
 /// virtual path on a swatch, gradient or numbering list is an edit of the
 /// whole spec, read here, merged and written back.

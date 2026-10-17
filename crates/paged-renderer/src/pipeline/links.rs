@@ -164,6 +164,17 @@ pub(crate) struct VarResolveCtx<'a> {
     pub running_headers: Option<&'a RunningHeaderIndex>,
 }
 
+/// ADR 169 — is `variable_id` a cross-reference page number
+/// (`XrefPageNumberType`, InDesign's `<?AID 001b?>TV XRefPageNumber`)?
+pub(crate) fn is_xref_page_number(designmap: &DesignMap, variable_id: &str) -> bool {
+    designmap
+        .text_variables
+        .iter()
+        .find(|v| v.self_id == variable_id)
+        .and_then(|v| v.variable_type.as_deref())
+        == Some("XrefPageNumberType")
+}
+
 /// True for the variable types whose value is another paragraph's or
 /// range's text on the page (they need the post-layout pass).
 pub(crate) fn is_running_header_type(variable_type: Option<&str>) -> bool {

@@ -1023,6 +1023,9 @@ fn continuation(paragraph: &paged_model::Paragraph) -> paged_model::Paragraph {
         // (matches anchored-frame convention above).
         footnotes: Vec::new(),
         index_markers: Vec::new(),
+        endnote_references: Vec::new(),
+        endnote_ranges: Vec::new(),
+        notes: Vec::new(),
     }
 }
 
@@ -1124,6 +1127,9 @@ pub(super) fn split_paragraph_into_segments(
         // empty vecs so the markers don't duplicate.
         footnotes: paragraph.footnotes.clone(),
         index_markers: paragraph.index_markers.clone(),
+        endnote_references: Vec::new(),
+        endnote_ranges: Vec::new(),
+        notes: Vec::new(),
     };
     let is_break = |c: char| c == '\n' || c == FORCED_LINE_BREAK;
     // The table stands at a character of the paragraph, on a line of its
@@ -1402,8 +1408,32 @@ pub(super) fn split_paragraph_into_segments(
                 table_anchor: None,
                 footnotes: Vec::new(),
                 index_markers: Vec::new(),
+                endnote_references: Vec::new(),
+                endnote_ranges: Vec::new(),
+                notes: Vec::new(),
             },
         });
+    }
+    // ADR 170 — each segment takes the endnote entries its own markers
+    // stand for, in order (the k-th marker of a segment is its k-th).
+    if !paragraph.endnote_references.is_empty() || !paragraph.endnote_ranges.is_empty() {
+        let mut refs = paragraph.endnote_references.iter().cloned();
+        let mut ranges = paragraph.endnote_ranges.iter().cloned();
+        for seg in subs.iter_mut() {
+            let count = |marker: char| {
+                seg.paragraph
+                    .runs
+                    .iter()
+                    .map(|r| r.text.matches(marker).count())
+                    .sum::<usize>()
+            };
+            let (n_ref, n_num) = (
+                count(paged_model::ENDNOTE_REFERENCE_MARKER),
+                count(paged_model::ENDNOTE_NUMBER_MARKER),
+            );
+            seg.paragraph.endnote_references = refs.by_ref().take(n_ref).collect();
+            seg.paragraph.endnote_ranges = ranges.by_ref().take(n_num).collect();
+        }
     }
     subs
 }

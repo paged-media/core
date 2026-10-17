@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! v73 — inserting and deleting a footnote (ADR 163).
+//! v0.71.13 — inserting and deleting a footnote (ADR 163).
 //!
 //! A footnote is two things in the model, as InDesign writes it: its
 //! reference, a [`FOOTNOTE_REFERENCE_MARKER`] character in its host
@@ -33,14 +33,14 @@ use crate::operation::{AppliedOperation, NodeId, Operation};
 
 use super::path_topology::reflow_hint_for_story;
 
-fn story_index(doc: &Document, story_id: &str) -> Result<usize, OperationError> {
+pub(super) fn story_index(doc: &Document, story_id: &str) -> Result<usize, OperationError> {
     doc.stories
         .iter()
         .position(|s| s.self_id == story_id)
         .ok_or_else(|| OperationError::NodeNotFound(NodeId::Story(story_id.to_string())))
 }
 
-fn chars(para: &paged_model::Paragraph) -> u32 {
+pub(super) fn chars(para: &paged_model::Paragraph) -> u32 {
     para.runs
         .iter()
         .map(|r| r.text.chars().count() as u32)
@@ -49,7 +49,7 @@ fn chars(para: &paged_model::Paragraph) -> u32 {
 
 /// The paragraph holding contiguous story char `offset`, and the offset
 /// within it; past the end, the last paragraph's end.
-fn locate(story: &paged_model::Story, offset: u32) -> Option<(usize, u32)> {
+pub(super) fn locate(story: &paged_model::Story, offset: u32) -> Option<(usize, u32)> {
     let mut start = 0u32;
     for (i, para) in story.paragraphs.iter().enumerate() {
         let n = chars(para);
@@ -61,13 +61,13 @@ fn locate(story: &paged_model::Story, offset: u32) -> Option<(usize, u32)> {
     None
 }
 
-fn paragraph_start(story: &paged_model::Story, index: usize) -> u32 {
+pub(super) fn paragraph_start(story: &paged_model::Story, index: usize) -> u32 {
     story.paragraphs[..index].iter().map(chars).sum()
 }
 
 /// Insert `ch` at paragraph-local char `at`, into the run that holds it
 /// (or ends there), so it takes that run's formatting.
-fn insert_char(para: &mut paged_model::Paragraph, at: u32, ch: char) {
+pub(super) fn insert_char(para: &mut paged_model::Paragraph, at: u32, ch: char) {
     let mut start = 0u32;
     let last = para.runs.len().saturating_sub(1);
     for (i, run) in para.runs.iter_mut().enumerate() {
@@ -91,7 +91,7 @@ fn insert_char(para: &mut paged_model::Paragraph, at: u32, ch: char) {
 }
 
 /// Remove the character at paragraph-local char `at`.
-fn remove_char(para: &mut paged_model::Paragraph, at: u32) {
+pub(super) fn remove_char(para: &mut paged_model::Paragraph, at: u32) {
     let mut start = 0u32;
     for run in para.runs.iter_mut() {
         let n = run.text.chars().count() as u32;
