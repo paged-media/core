@@ -103,6 +103,7 @@ is not written yet.
 | [172](172-editorial-notes.md) | Editorial notes, kept and edited as InDesign keeps them | Accepted 2026-10-16 |
 | [173](173-bookmarks-edited.md) | Bookmarks created, renamed, moved and deleted as InDesign does it | Accepted 2026-10-16 |
 | [174](174-endnotes-inserted-and-deleted.md) | Endnotes inserted, deleted and converted from footnotes, as InDesign does it | Accepted 2026-10-17 |
+| [175](175-table-row-start.md) | A table row starts where its Start Row option asks, as InDesign sets it | Accepted 2026-10-17 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
