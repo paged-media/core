@@ -1,4 +1,3 @@
-TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 #!/usr/bin/env bash
 # corpus/generated/render-diff.sh — the fidelity ENGINE.
 #
@@ -40,6 +39,7 @@ NAME="${1:-sample}"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 while [ ! -f "$ROOT/Cargo.toml" ] && [ "$ROOT" != "/" ]; do ROOT="$(dirname "$ROOT")"; done
 [ -f "$ROOT/Cargo.toml" ] || { echo "error: no Cargo.toml above $0 — run me from inside the core checkout" >&2; exit 2; }
+TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 SAMPLE_DIR="$ROOT/corpus/samples"
 GENERATED_DIR="$ROOT/corpus/generated"
 # Resolve the IDML/PDF pair against either the curated samples

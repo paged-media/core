@@ -419,6 +419,30 @@ pub(super) fn emit_table_into_chain(
             }
             row_heights[r..=end].iter().sum()
         };
+        // ADR 175 — a row's Start Row option moves it, and the rows after
+        // it, as a paragraph's StartParagraph moves its first line
+        // (InDesign 20.0.1, `table-start-row-probe`): to the next column,
+        // frame or page, or to the next page of the asked parity, past an
+        // empty frame between. A row that already opens what the rule
+        // asks for stays.
+        let mut start_to = None;
+        if let Some(rule) = table.rows.get(r).and_then(|row| row.start_row) {
+            let frames: Vec<Option<&str>> = em.chain.iter().map(|f| f.self_id.as_deref()).collect();
+            let last_placed = if placed_in_frame > 0 {
+                Some(chain_idx)
+            } else {
+                em.last_placed_frame
+            };
+            match super::keeps::start_target(rule, chain_idx, last_placed, &frames, &em.chain_pages)
+            {
+                super::keeps::StartMove::Stay => {}
+                super::keeps::StartMove::To(j) => start_to = Some(j),
+                super::keeps::StartMove::Overset => {
+                    overset_at = Some(r);
+                    break;
+                }
+            }
+        }
         // A row never splits: one that does not fit moves to the next
         // frame, and one that fits no frame is overset with everything
         // after it (InDesign, 2026-10-02, `tables-rows` page 9: a 179 pt
@@ -439,43 +463,55 @@ pub(super) fn emit_table_into_chain(
             // nothing (measured 2026-09-07 on `tables-overset`: 4 rows of
             // 28 pt in a 20 pt frame is zero ink in InDesign's own export,
             // and was one row here).
-            if would_overflow && chain_idx + 1 >= em.chain.len() && !last_frame_grows_height {
-                overset_at = Some(r);
-                break;
-            }
-            if !((would_overflow || run_overflows)
-                && chain_idx + 1 < em.chain.len()
-                && placed_in_frame > 0)
-            {
-                break;
-            }
-            body_placed_in_frame = 0;
-            // Append replayed footers at the bottom of this frame.
-            if repeating_footer {
-                for fr in (total_rows - footer_count)..total_rows {
-                    let fh = row_heights[fr];
-                    physical_rows.push(PhysicalRow {
-                        template_idx: fr,
-                        height: fh,
-                        chain_idx,
-                        target_page,
-                        table_left_pt: tab_left,
-                        row_top_in_page: frame_top_in_page + row_top_y_in_frame,
-                        kind: RowKind::FooterReplay,
-                    });
-                    row_top_y_in_frame += fh;
-                    current_frame_last_bottom = frame_top_in_page + row_top_y_in_frame;
+            let start_here = start_to.take();
+            if start_here.is_none() {
+                if would_overflow && chain_idx + 1 >= em.chain.len() && !last_frame_grows_height {
+                    overset_at = Some(r);
+                    break;
+                }
+                if !((would_overflow || run_overflows)
+                    && chain_idx + 1 < em.chain.len()
+                    && placed_in_frame > 0)
+                {
+                    break;
                 }
             }
-            // Close out current frame's extent.
-            frame_extents.push((
-                chain_idx,
-                target_page,
-                tab_left,
-                current_frame_first_top,
-                current_frame_last_bottom,
-            ));
-            chain_idx += 1;
+            // A start row can leave a frame before any body row: a header
+            // with no row under it is not placed (the rule measured for
+            // the last frame, below) — the next frame replays it — and
+            // a frame that holds nothing closes nothing.
+            let leaves_no_body = start_here.is_some() && body_placed_in_frame == 0;
+            body_placed_in_frame = 0;
+            if leaves_no_body && repeating_header {
+                physical_rows.retain(|row| row.chain_idx != chain_idx);
+            } else if !leaves_no_body || placed_in_frame > 0 {
+                // Append replayed footers at the bottom of this frame.
+                if repeating_footer && !leaves_no_body {
+                    for fr in (total_rows - footer_count)..total_rows {
+                        let fh = row_heights[fr];
+                        physical_rows.push(PhysicalRow {
+                            template_idx: fr,
+                            height: fh,
+                            chain_idx,
+                            target_page,
+                            table_left_pt: tab_left,
+                            row_top_in_page: frame_top_in_page + row_top_y_in_frame,
+                            kind: RowKind::FooterReplay,
+                        });
+                        row_top_y_in_frame += fh;
+                        current_frame_last_bottom = frame_top_in_page + row_top_y_in_frame;
+                    }
+                }
+                // Close out current frame's extent.
+                frame_extents.push((
+                    chain_idx,
+                    target_page,
+                    tab_left,
+                    current_frame_first_top,
+                    current_frame_last_bottom,
+                ));
+            }
+            chain_idx = start_here.unwrap_or(chain_idx + 1);
             let (l, ftop, h_next, ti, tp) = frame_basis_for(chain_idx, line_shift);
             tab_left = l + border_off_left;
             frame_top_in_page = ftop;

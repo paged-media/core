@@ -1582,6 +1582,8 @@
     "cellRightEdgeStrokeColor",
     "cellRightEdgeStrokeWeight",
     "cellRightEdgeStrokeTint",
+    "rowStartRow",
+    "rowKeepWithNext",
     "pluginMetadata",
     "anchoredPosition",
     "anchorPoint",
@@ -6676,6 +6678,52 @@
         {
           "element": "Cell",
           "attribute": "RightEdgeStrokeTint",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "cell",
+      "path": "rowStartRow",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Anywhere",
+          "NextColumn",
+          "NextFrame",
+          "NextPage",
+          "NextOddPage",
+          "NextEvenPage"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Anywhere",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "Row",
+          "attribute": "StartRow",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "cell",
+      "path": "rowKeepWithNext",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "Row",
+          "attribute": "KeepWithNextRow",
           "kind": "attr"
         }
       ]

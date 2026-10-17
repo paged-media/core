@@ -7499,6 +7499,12 @@ pub struct TableRow {
     /// frame together. `None` ⇒ `false`, the IDML default.
     #[serde(default)]
     pub keep_with_next_row: Option<bool>,
+    /// `StartRow`: where the row starts. InDesign 20.0.1 sets it as a
+    /// paragraph's `StartParagraph` (ADR 175): the row, and every row
+    /// after it, moves to the next column, frame or page, or to the next
+    /// page of the asked parity. `None` ⇒ `Anywhere`, the IDML default.
+    #[serde(default)]
+    pub start_row: Option<StartParagraph>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableColumn {

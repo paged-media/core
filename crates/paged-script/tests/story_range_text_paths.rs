@@ -216,7 +216,8 @@ fn the_promoted_paths_are_in_the_published_catalog() {
         // knockout, and the drop shadow's attributes.
         // 239: ADR 153 added the line setting and no-break.
         // 241: ADR 158 added the list level and its restart flag.
-        241,
+        // 243: ADR 175 added a row's start rule and its keep with next.
+        243,
         "the advertised roster changed; move the count with the decision"
     );
 }
