@@ -1824,7 +1824,7 @@ fn no_emitted_sample_has_a_duplicate_attribute() {
         for i in 0..zip.len() {
             use std::io::Read as _;
             let mut entry = zip.by_index(i).expect("zip entry");
-            let entry_name = entry.name().to_string();
+            let entry_name = entry.name().expect("zip entry name").into_owned();
             if entry.is_dir() || !entry_name.ends_with(".xml") {
                 continue;
             }
@@ -2606,8 +2606,8 @@ fn numbering_lists_are_designmap_children_applied_through_properties() {
     let story_names: Vec<String> = {
         let zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
         zip.file_names()
+            .map(|n| n.unwrap().into_owned())
             .filter(|n| n.starts_with("Stories/"))
-            .map(str::to_string)
             .collect()
     };
     for name in story_names {

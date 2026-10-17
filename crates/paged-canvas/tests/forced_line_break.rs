@@ -204,7 +204,7 @@ fn idml_export_writes_the_forced_line_break_inside_content() {
     let mut found = None;
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).expect("entry");
-        if !f.name().starts_with("Stories/") {
+        if !f.name().unwrap().starts_with("Stories/") {
             continue;
         }
         let mut xml = String::new();
