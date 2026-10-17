@@ -4282,6 +4282,7 @@ pub(super) fn capture_footnotes(
             first_line: 0,
             end_line: None,
             continued: false,
+            resume_at: None,
             ref_baseline_pt,
         });
     }
