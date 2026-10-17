@@ -1090,6 +1090,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6e8948ce679d00a02a94739ea185595dca7118ed04feb991127e443bd3d761f"
 
 [[package]]
+name = "fastcdc"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0431c3132902a1bed6fe77dcfa5d03844e083f263b81288246a2d43dd7d4b2ad"
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2909,6 +2915,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "paged-repo"
+version = "0.0.0"
+dependencies = [
+ "blake3",
+ "fastcdc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+ "zip",
+]
+
+[[package]]
 name = "paged-run"
 version = "0.0.0"
 dependencies = [
@@ -4037,7 +4056,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys",

@@ -96,6 +96,7 @@ is not written yet.
 | [165](165-update-table-of-contents.md) | Update Table of Contents, as InDesign writes it | Accepted 2026-10-16 |
 | [166](166-a-ruby-wider-than-its-base.md) | A ruby wider than its base, and kana at their proportional widths | Accepted 2026-10-16 |
 | [167](167-japanese-lines-and-vertical-text.md) | Japanese lines, and vertical text as horizontal text turned | Accepted 2026-10-16 |
+| [180](180-the-repository-is-the-document.md) | The repository is the document; a file is a projection | Proposed 2026-10-17 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
