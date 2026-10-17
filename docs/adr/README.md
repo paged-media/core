@@ -106,6 +106,7 @@ is not written yet.
 | [175](175-table-row-start.md) | A table row starts where its Start Row option asks, as InDesign sets it | Accepted 2026-10-17 |
 | [176](176-nested-tables.md) | A table nested in a cell is drawn as any table is, as InDesign draws it | Accepted 2026-10-17 |
 | [177](177-table-rows-fit-the-text-area.md) | A frame holds the table rows its text area holds, strokes included | Accepted 2026-10-17 |
+| [181](181-the-viewer-reads-paged-containers.md) | The viewer opens a `.paged` container from its model part, as the editor does | Accepted 2026-10-17 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
