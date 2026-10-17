@@ -472,6 +472,12 @@ fn host_functions() -> Vec<HostFn> {
            "Delete a bookmark and the bookmarks under it, and the page destinations nothing else goes to. Undo puts them back."),
         f!("paged.renameBookmark", "(bookmarkId, name)", "bool", "author",
            "Rename a bookmark."),
+        f!("paged.insertEndnote", "(storyId, offset, text)", "string|null", "author",
+           "Insert an endnote at a story offset: its reference there and its range in the endnote story, after the note before it, as InDesign writes one. The first endnote makes the endnote story on a page of its own. Returns the endnote's id; read them with paged.collection(\"endnotes\")."),
+        f!("paged.deleteEndnote", "(endnoteId)", "bool", "author",
+           "Delete an endnote: its reference and its range. Undo puts both back as they were."),
+        f!("paged.convertFootnoteToEndnote", "(storyId, footnoteId)", "string|null", "author",
+           "Convert a footnote to an endnote: the footnote goes and an endnote of its text takes its reference's place. Returns the endnote's id."),
         f!("paged.moveBookmark", "(bookmarkId, parentId?, index?)", "bool", "author",
            "Move a bookmark with the bookmarks under it: under another bookmark (the top level for null), at an index among its siblings."),
         // --- layer attributes ---

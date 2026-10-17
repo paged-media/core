@@ -78,7 +78,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   destinations read in InDesign's spelling ([ADR 169](adr/169-update-cross-references.md)).
 - **Endnotes and PDF bookmarks.** Endnote references and the endnote story's numbers print as
   InDesign numbers them, and its endnote frame is placed ([ADR 170](adr/170-endnotes-as-indesign-writes-them.md));
-  no endnote op yet. PDF export writes the document's bookmarks as a nested outline when asked
+  `insertEndnote`, `deleteEndnote` and `convertFootnoteToEndnote` edit them as InDesign does, the
+  first making the endnote story on a page of its own, and they save as InDesign reads them back
+  ([ADR 174](adr/174-endnotes-inserted-and-deleted.md), protocol 73). PDF export writes the
+  document's bookmarks as a nested outline when asked
   ([ADR 171](adr/171-pdf-bookmarks.md)).
 - **Editorial notes.** A `<Note>` is read as InDesign keeps it, one character of the text that
   prints nothing, with its text, author and dates (`documentCollection:notes`); `insertNote`,

@@ -1315,6 +1315,21 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             2,
         )
         .function(guarded(paged_move_bookmark), js_string!("moveBookmark"), 3)
+        .function(
+            guarded(paged_insert_endnote),
+            js_string!("insertEndnote"),
+            3,
+        )
+        .function(
+            guarded(paged_delete_endnote),
+            js_string!("deleteEndnote"),
+            1,
+        )
+        .function(
+            guarded(paged_convert_footnote_to_endnote),
+            js_string!("convertFootnoteToEndnote"),
+            2,
+        )
         // layer attributes
         .function(
             guarded(paged_layer_set_visible),
@@ -3318,6 +3333,76 @@ fn paged_move_bookmark(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
         parent,
         index,
     }))
+}
+
+/// The endnote ids `m` lists, in reference order.
+fn endnote_ids(m: &paged_canvas::CanvasModel) -> Vec<String> {
+    m.endnotes().into_iter().map(|e| e.id).collect()
+}
+
+/// `paged.insertEndnote(storyId, offset, text)` — insert an endnote at
+/// story char `offset` (`Mutation::InsertEndnote`, ADR 174): its reference
+/// there and its range in the endnote story, which the first endnote makes
+/// on a page of its own. Returns the new endnote's id, or `null` when the
+/// insert was refused. The read side is `paged.collection("endnotes")`.
+fn paged_insert_endnote(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let text = opt_string(args.get_or_undefined(2), ctx).unwrap_or_default();
+    let minted = with_model(|m| {
+        let before = endnote_ids(m);
+        m.apply_mutation(&Mutation::InsertEndnote {
+            story_id,
+            offset,
+            paragraph: None,
+            text,
+        })
+        .ok()?;
+        endnote_ids(m).into_iter().find(|id| !before.contains(id))
+    });
+    Ok(minted.map_or(JsValue::null(), |id| JsValue::from(js_string!(id))))
+}
+
+/// `paged.deleteEndnote(endnoteId)` — delete an endnote, its reference and
+/// its range (`Mutation::DeleteEndnote`, ADR 174).
+fn paged_delete_endnote(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let endnote_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteEndnote { endnote_id }))
+}
+
+/// `paged.convertFootnoteToEndnote(storyId, footnoteId)` — the footnote
+/// becomes an endnote of its text at its reference's place
+/// (`Mutation::ConvertFootnoteToEndnote`, ADR 174). Returns the endnote's
+/// id, or `null` when refused.
+fn paged_convert_footnote_to_endnote(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let footnote_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let minted = with_model(|m| {
+        let before = endnote_ids(m);
+        m.apply_mutation(&Mutation::ConvertFootnoteToEndnote {
+            story_id,
+            footnote_id,
+        })
+        .ok()?;
+        endnote_ids(m).into_iter().find(|id| !before.contains(id))
+    });
+    Ok(minted.map_or(JsValue::null(), |id| JsValue::from(js_string!(id))))
 }
 
 // ---------------------------------------------------- tables

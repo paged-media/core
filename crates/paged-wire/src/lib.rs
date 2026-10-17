@@ -1248,6 +1248,36 @@ pub enum Mutation {
         bookmark_id: String,
         name: String,
     },
+    /// Insert an endnote (ADR 174): its reference at story char `offset`
+    /// (the `InsertFootnote` address space) and its range in the endnote
+    /// story, after the range of the reference before it, `text` after
+    /// its number and separator, as InDesign 20.0.1 writes one. The first
+    /// endnote of a document makes the endnote story as InDesign does: a
+    /// page at the end with an `<EndnoteTextFrame>` over its margin box,
+    /// the story holding the title. The model mints the ids and reports the
+    /// endnote's in the reply. Undoable in one step.
+    InsertEndnote {
+        story_id: String,
+        offset: u32,
+        /// The paragraph `offset` stands in; `offset` is clamped into it.
+        #[serde(default)]
+        paragraph: Option<u32>,
+        #[serde(default)]
+        text: String,
+    },
+    /// Delete an endnote by its `<Endnote>` `Self` id (ADR 174): its
+    /// reference and its range. Undoable in one step.
+    DeleteEndnote {
+        endnote_id: String,
+    },
+    /// Convert a footnote to an endnote (ADR 174): the footnote goes and an
+    /// endnote of its text takes its reference's place. InDesign's DOM has
+    /// no such call (its Convert Footnote and Endnote is a dialog), so this
+    /// is the two ops InDesign has, in one undo step.
+    ConvertFootnoteToEndnote {
+        story_id: String,
+        footnote_id: String,
+    },
     /// Move bookmark `bookmark_id` with the bookmarks under it (ADR 173):
     /// under `parent` (the top level when absent) at `index` among its
     /// children (the end when absent). Undoable in one step.
@@ -2456,6 +2486,9 @@ mutation_vocabulary! {
     DeleteBookmark,
     RenameBookmark,
     MoveBookmark,
+    InsertEndnote,
+    DeleteEndnote,
+    ConvertFootnoteToEndnote,
     SetFieldValue,
     PlaceImage,
     ReplaceImageBytes,
