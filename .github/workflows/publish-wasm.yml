@@ -130,7 +130,7 @@ jobs:
             || echo "  (could not decode claims)"
 
           FAILED=0
-          for PKG in canvas-wasm introspect-wasm sdk idml-viewer; do
+          for PKG in canvas-wasm introspect-wasm sdk repo-wasm idml-viewer; do
             CODE="$(curl -sS -o /tmp/exch.json -w '%{http_code}' -X POST \
               -H "Authorization: Bearer ${ID_TOKEN}" \
               "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@paged-media%2f${PKG}")"
@@ -147,7 +147,7 @@ jobs:
             echo "::notice::Still on token auth. Each package needs its OWN Trusted Publisher entry"
             echo "::notice::(org 'paged-media', repo 'core', workflow 'publish-wasm.yml', no environment)."
           else
-            echo "::notice::All four packages authenticate via OIDC — the NPM_TOKEN can be retired."
+            echo "::notice::All five packages authenticate via OIDC — the NPM_TOKEN can be retired."
           fi
 
       # The version is the tag, so a run on anything else must not reach the
@@ -261,6 +261,28 @@ jobs:
             license: 'MPL-2.0 OR LicenseRef-PMEL'
           }, null, 2))"
 
+      - name: Build @paged-media/repo-wasm
+        run: |
+          set -euo pipefail
+          # The document repository (ADR 180): no engine, no wire, so it rides
+          # the engine's version for traceability but not its protocol.
+          cargo build --profile wasm-release --target wasm32-unknown-unknown -p paged-repo-wasm
+          OUT=dist/repo-wasm
+          mkdir -p "$OUT"
+          wasm-bindgen target/wasm32-unknown-unknown/wasm-release/paged_repo_wasm.wasm \
+            --target web --out-dir "$OUT"
+          wasm-opt -Oz "$OUT/paged_repo_wasm_bg.wasm" -o "$OUT/paged_repo_wasm_bg.wasm.opt" \
+            && mv "$OUT/paged_repo_wasm_bg.wasm.opt" "$OUT/paged_repo_wasm_bg.wasm"
+          node -e "require('fs').writeFileSync('$OUT/package.json', JSON.stringify({
+            name: '@paged-media/repo-wasm',
+            version: '${{ steps.ver.outputs.version }}',
+            type: 'module',
+            main: 'paged_repo_wasm.js',
+            types: 'paged_repo_wasm.d.ts',
+            files: ['paged_repo_wasm.js','paged_repo_wasm_bg.wasm','paged_repo_wasm.d.ts'],
+            license: 'MPL-2.0 OR LicenseRef-PMEL'
+          }, null, 2))"
+
       - name: Subset audit — paged-sdk must not link editor crates
         run: |
           set -euo pipefail
@@ -342,4 +364,5 @@ jobs:
           npm publish --loglevel verbose --access public --tag "$TAG" ./dist/canvas-wasm
           npm publish --loglevel verbose --access public --tag "$TAG" ./dist/introspect-wasm
           npm publish --loglevel verbose --access public --tag "$TAG" ./dist/sdk
+          npm publish --loglevel verbose --access public --tag "$TAG" ./dist/repo-wasm
           npm publish --loglevel verbose --access public --tag "$TAG" ./web/idml-viewer

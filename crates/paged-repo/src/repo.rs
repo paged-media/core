@@ -99,8 +99,8 @@ impl<S: Store> Repo<S> {
                 return Err(Error::Tampered(*h));
             }
         }
-        for (h, (_, bytes)) in objects {
-            self.store.put(h, bytes);
+        for (h, (kind, bytes)) in objects {
+            self.store.put(kind, h, bytes);
         }
         Ok(())
     }
@@ -164,18 +164,25 @@ impl<S: Store> Repo<S> {
         via_merge: bool,
     ) -> Result<(), Error> {
         let mut fresh = Vec::new();
+        let mut fresh_ids = BTreeSet::new();
         for (h, (kind, bytes)) in &objects {
             if *kind == Kind::Commit && !self.store.has(h) {
                 fresh.push(decode::<Commit>(bytes)?);
+                fresh_ids.insert(*h);
             }
         }
         if let Err(r) = self.check_new_commits(ctx, &fresh) {
             return self.refuse(ctx, "receive", ref_name, r);
         }
         self.ingest(objects)?;
+        // A commit the store already had reaches only what it has (this check
+        // ran when it arrived), so only the arriving commits are walked.
         if let Some(head) = new {
-            for (kind, h) in reachable(&self.store, &[head], |_| false)? {
-                read(&self.store, kind, &h)?;
+            let had = |c: &Hash| !fresh_ids.contains(c) && self.store.has(c);
+            for (_, h) in reachable(&self.store, &[head], had)? {
+                if !self.store.has(&h) {
+                    return Err(Error::Missing(h));
+                }
             }
         }
         self.update_ref(ref_name, expected, new, ctx, via_merge)
@@ -223,7 +230,7 @@ impl<S: Store> Repo<S> {
         let snap = import(file, name)?;
         if let Some(history) = snap.history {
             if self.store.refs().is_empty() && self.store.evidence().is_empty() {
-                return self.restore(history, ref_name);
+                return self.restore_history(history, ref_name);
             }
         }
         self.commit(
@@ -236,7 +243,7 @@ impl<S: Store> Repo<S> {
         )
     }
 
-    fn restore(&mut self, history: Bundle, ref_name: &str) -> Result<Hash, Error> {
+    fn restore_history(&mut self, history: Bundle, ref_name: &str) -> Result<Hash, Error> {
         verify_chain(&history.evidence)?;
         self.ingest(history.objects)?;
         for (name, head) in &history.refs {
@@ -406,19 +413,49 @@ impl<S: Store> Repo<S> {
                 expected: None,
                 found: None,
             })?;
-        let tree = read_commit(&self.store, &head)?.tree;
-        let action = if with_history {
-            "export-history"
-        } else {
-            "export"
-        };
-        self.record(ctx, action, ref_name, "ok");
+        self.export_commit(head, ref_name, ctx, with_history)
+    }
+
+    /// The `.paged` projection of one commit, recorded against `target` (the
+    /// ref or version the reader asked for).
+    pub fn export_commit(
+        &mut self,
+        commit: Hash,
+        target: &str,
+        ctx: &Ctx,
+        with_history: bool,
+    ) -> Result<Vec<u8>, Error> {
+        let tree = read_commit(&self.store, &commit)?.tree;
         let extra = if with_history {
             bundle_parts(&self.bundle()?)
         } else {
             Vec::new()
         };
-        project(&self.store, &tree, &extra)
+        // Projected before it is recorded: a host that faults objects in
+        // runs this again, and must not record the export twice.
+        let file = project(&self.store, &tree, &extra)?;
+        let action = if with_history {
+            "export-history"
+        } else {
+            "export"
+        };
+        self.record(ctx, action, target, "ok");
+        Ok(file)
+    }
+
+    /// Makes an earlier version current again as a new commit on `ref_name`:
+    /// history is kept, nothing is rewound.
+    pub fn restore(&mut self, version: Hash, ref_name: &str, ctx: &Ctx) -> Result<Hash, Error> {
+        let tree = read_commit(&self.store, &version)?.tree;
+        let short = &version.to_hex()[..12];
+        self.commit(
+            BTreeMap::new(),
+            tree,
+            ref_name,
+            ctx,
+            &format!("Restore {short}"),
+            None,
+        )
     }
 
     /// Removes every object no ref reaches. Returns how many went.

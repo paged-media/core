@@ -2928,6 +2928,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "paged-repo-wasm"
+version = "0.0.0"
+dependencies = [
+ "paged-repo",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "paged-run"
 version = "0.0.0"
 dependencies = [

@@ -97,3 +97,22 @@ that is present and does not parse refuses every write.
 To push a ref, a client walks from the new head back to commits the remote already has and
 offers the addresses it found; the remote answers with the ones it lacks; the client sends
 only those, then asks the remote to compare-and-set the ref.
+
+## On disk
+
+A host with a file system (the browser's private file system, a disk, an object store) keeps a
+repository as:
+
+| File | Content |
+|---|---|
+| `packs/<n>.pack` | object records, as in the history bundle; append-only, one per write |
+| `packs/<n>.idx` | one 45-byte record per object: address, kind tag, u64 offset of its bytes, u32 length (little-endian) |
+| `refs.json` | `{name: address}`, rewritten whole |
+| `evidence.jsonl` | one canonical evidence entry per line, appended |
+
+Opening loads the indexes, the refs and the evidence, then reads the commits, trees and chunk
+lists. Blobs are read when an operation needs one. An object dropped by collection stays in its
+pack until the host rewrites the pack.
+
+The npm package `@paged-media/repo-wasm` exposes this to a browser host: the host owns the files,
+the repository says what to write (`flush`) and which object it is missing (`missing:<address>`).

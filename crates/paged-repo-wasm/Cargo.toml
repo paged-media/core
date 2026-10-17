@@ -1,0 +1,20 @@
+[package]
+name = "paged-repo-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "wasm-bindgen surface for paged-repo: a document repository kept in packs by its host (npm @paged-media/repo-wasm)."
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+paged-repo = { path = "../paged-repo" }
+serde = { workspace = true }
+serde_json = "1"
+wasm-bindgen = { workspace = true }

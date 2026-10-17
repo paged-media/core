@@ -23,8 +23,8 @@ pub trait Store {
     fn has(&self, hash: &Hash) -> bool {
         self.get(hash).is_some()
     }
-    /// Stores an object. The caller has verified its address.
-    fn put(&mut self, hash: Hash, bytes: Vec<u8>);
+    /// Stores an object of `kind`. The caller has verified its address.
+    fn put(&mut self, kind: Kind, hash: Hash, bytes: Vec<u8>);
     fn get_ref(&self, name: &str) -> Option<Hash>;
     fn refs(&self) -> Vec<(String, Hash)>;
     /// Moves `name` from `expected` to `new` (`None` = absent), or reports
@@ -70,7 +70,7 @@ impl Store for MemoryStore {
         self.objects.contains_key(hash)
     }
 
-    fn put(&mut self, hash: Hash, bytes: Vec<u8>) {
+    fn put(&mut self, _kind: Kind, hash: Hash, bytes: Vec<u8>) {
         self.objects.entry(hash).or_insert(bytes);
     }
 

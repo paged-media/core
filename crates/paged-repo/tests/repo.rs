@@ -399,7 +399,9 @@ fn a_file_can_carry_its_history() {
     let head = fresh.import(&file, "d.paged", "main", &me()).unwrap();
     assert_eq!(Some(head), repo.head("main"));
     assert_eq!(fresh.store.refs, repo.store.refs);
-    assert_eq!(fresh.store.evidence.len(), repo.store.evidence.len());
+    // The file carries the evidence as it stood before this export was recorded.
+    let before_export = &repo.store.evidence[..repo.store.evidence.len() - 1];
+    assert_eq!(fresh.store.evidence, before_export);
     fresh.verify_evidence().unwrap();
     assert_eq!(fresh.log("main").unwrap().len(), 2);
 
@@ -482,8 +484,8 @@ fn diff_names_changed_parts() {
     let a = import(&doc(noise(10, 1)), "a").unwrap();
     let b = import(&doc(noise(10, 2)), "b").unwrap();
     let mut store = MemoryStore::default();
-    for (h, (_, bytes)) in a.objects.into_iter().chain(b.objects) {
-        store.put(h, bytes);
+    for (h, (kind, bytes)) in a.objects.into_iter().chain(b.objects) {
+        store.put(kind, h, bytes);
     }
     let repo = Repo::new(store, Ok(Policy::local("user:me")));
     let d = diff_trees(
@@ -504,8 +506,8 @@ fn collection_keeps_what_refs_reach() {
     let mut repo = local();
     snapshot_commit(&mut repo, &doc(noise(10, 1)), "main", &me()).unwrap();
     let s = import(&doc(noise(10, 99)), "orphan").unwrap();
-    for (h, (_, bytes)) in s.objects {
-        repo.store.put(h, bytes);
+    for (h, (kind, bytes)) in s.objects {
+        repo.store.put(kind, h, bytes);
     }
     assert!(repo.gc().unwrap() >= 2);
     repo.export("main", &me(), false).unwrap();
@@ -563,4 +565,19 @@ fn corpus_files_round_trip() {
         n += 1;
     }
     eprintln!("round-tripped {n} files");
+}
+
+#[test]
+fn restoring_a_version_is_a_new_commit() {
+    let mut repo = local();
+    let v1 = snapshot_commit(&mut repo, &doc(noise(10, 1)), "main", &me()).unwrap();
+    snapshot_commit(&mut repo, &doc(noise(10, 2)), "main", &me()).unwrap();
+    let r = repo.restore(v1, "main", &me()).unwrap();
+    assert_eq!(
+        repo.read_commit(&r).unwrap().tree,
+        repo.read_commit(&v1).unwrap().tree
+    );
+    assert_eq!(repo.log("main").unwrap().len(), 3);
+    let old = repo.export_commit(v1, "v1", &me(), false).unwrap();
+    assert_eq!(old, repo.export("main", &me(), false).unwrap());
 }

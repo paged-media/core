@@ -25,6 +25,7 @@ mod evidence;
 mod hash;
 mod merge;
 mod object;
+mod pack;
 mod package;
 mod policy;
 mod repo;
@@ -39,6 +40,7 @@ pub use object::{
     decode, encode, Actor, ActorKind, ChunkList, Commit, EntryKind, ImportedFrom, Provenance, Tree,
     TreeEntry,
 };
+pub use pack::{faulting, Flush, Loc, PackFile, PackStore};
 pub use package::{
     bundle_parts, import, project, read_part, Bundle, Snapshot, CHUNK_THRESHOLD, HISTORY_PREFIX,
 };

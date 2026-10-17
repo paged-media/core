@@ -20,6 +20,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
 use crate::object::check_path;
+use crate::pack::{read_records, write_record};
 use crate::store::read;
 use crate::{
     address, decode, encode, verify_chain, ChunkList, EntryKind, Error, EvidenceEntry, Hash,
@@ -227,10 +228,7 @@ pub fn project(
 pub fn bundle_parts(bundle: &Bundle) -> Vec<(String, Vec<u8>)> {
     let mut objects = Vec::new();
     for (h, (kind, bytes)) in &bundle.objects {
-        objects.push(kind.tag());
-        objects.extend_from_slice(&h.0);
-        objects.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-        objects.extend_from_slice(bytes);
+        write_record(&mut objects, *kind, h, bytes);
     }
     let evidence: Vec<EvidenceEntry> = bundle
         .evidence
@@ -250,22 +248,10 @@ fn unbundle(parts: &BTreeMap<String, Vec<u8>>) -> Result<Bundle, Error> {
             .get(p)
             .ok_or_else(|| Error::Package(format!("history lacks `{p}`")))
     };
-    let raw = get(OBJECTS_PART)?;
-    let mut objects = BTreeMap::new();
-    let mut at = 0usize;
-    while at < raw.len() {
-        let short = || Error::Package("truncated history objects".into());
-        let head = raw.get(at..at + 37).ok_or_else(short)?;
-        let kind = Kind::from_tag(head[0]).ok_or_else(short)?;
-        let hash = Hash(head[1..33].try_into().expect("32 bytes"));
-        let len = u32::from_le_bytes(head[33..37].try_into().expect("4 bytes")) as usize;
-        let bytes = raw.get(at + 37..at + 37 + len).ok_or_else(short)?.to_vec();
-        if address(kind, &bytes) != hash {
-            return Err(Error::Tampered(hash));
-        }
-        objects.insert(hash, (kind, bytes));
-        at += 37 + len;
-    }
+    let objects = read_records(get(OBJECTS_PART)?)?
+        .into_iter()
+        .map(|(kind, hash, bytes)| (hash, (kind, bytes)))
+        .collect();
     let refs: BTreeMap<String, Hash> = serde_json::from_slice(get(REFS_PART)?)?;
     let entries: Vec<EvidenceEntry> = serde_json::from_slice(get(EVIDENCE_PART)?)?;
     let evidence: Vec<Vec<u8>> = entries.iter().map(encode).collect();
