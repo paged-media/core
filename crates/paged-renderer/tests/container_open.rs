@@ -31,12 +31,12 @@ fn container(idml: &[u8], pgm: &[u8]) -> Vec<u8> {
     let mut out = ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..src.len() {
         let mut f = src.by_index(i).expect("entry");
-        let method = if f.name() == "mimetype" {
+        let method = if f.name().unwrap() == "mimetype" {
             CompressionMethod::Stored
         } else {
             CompressionMethod::Deflated
         };
-        let name = f.name().to_string();
+        let name = f.name().unwrap().to_string();
         let mut body = Vec::new();
         f.read_to_end(&mut body).expect("read");
         out.start_file(
