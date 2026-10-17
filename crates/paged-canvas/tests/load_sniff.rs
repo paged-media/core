@@ -38,7 +38,7 @@ fn inject_part(zip_bytes: &[u8], path: &str, bytes: &[u8]) -> Vec<u8> {
     let mut zw = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..src.len() {
         let mut f = src.by_index(i).expect("read entry");
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").into_owned();
         let method = if name == "mimetype" {
             zip::CompressionMethod::Stored
         } else {

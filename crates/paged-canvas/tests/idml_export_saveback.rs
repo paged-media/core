@@ -91,7 +91,7 @@ fn entries(idml: &[u8]) -> BTreeMap<String, Vec<u8>> {
         if e.is_dir() {
             continue;
         }
-        let name = e.name().to_string();
+        let name = e.name().unwrap().into_owned();
         let mut buf = Vec::new();
         e.read_to_end(&mut buf).expect("read entry");
         out.insert(name, buf);

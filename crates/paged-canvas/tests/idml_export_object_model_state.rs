@@ -38,10 +38,11 @@ fn entries(zip_bytes: &[u8], prefix: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        if f.name().starts_with(prefix) {
+        let name = f.name().unwrap().into_owned();
+        if name.starts_with(prefix) {
             let mut s = String::new();
             f.read_to_string(&mut s).unwrap();
-            out.push((f.name().to_string(), s));
+            out.push((name, s));
         }
     }
     out

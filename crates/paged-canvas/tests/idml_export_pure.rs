@@ -75,7 +75,7 @@ fn small_idml() -> Vec<u8> {
 
 fn entry_names(package: &[u8]) -> Vec<String> {
     let zip = zip::ZipArchive::new(Cursor::new(package)).expect("zip");
-    zip.file_names().map(|n| n.to_string()).collect()
+    zip.file_names().map(|n| n.unwrap().into_owned()).collect()
 }
 
 fn entry(package: &[u8], name: &str) -> Option<String> {

@@ -378,9 +378,9 @@ fn a_deleted_part_leaves_the_saved_container() {
     );
     let bytes: Vec<u8> = serde_json::from_value(saved["payload"]["bytes"].clone()).unwrap();
     let zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let names: Vec<&str> = zip.file_names().collect();
-    assert!(names.contains(&"paged/t/keep"), "{names:?}");
-    assert!(!names.contains(&"paged/t/drop"), "{names:?}");
+    let names: Vec<String> = zip.file_names().map(|n| n.unwrap().into_owned()).collect();
+    assert!(names.iter().any(|n| n == "paged/t/keep"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "paged/t/drop"), "{names:?}");
 
     // Writing the path again lifts the tombstone.
     let r = send(

@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 zip = { workspace = true }
+flate2 = { workspace = true }
 quick-xml = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
@@ -19,7 +20,7 @@ blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "7309290f66192876036090d2e980e99bced12a16" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "763c547ed0f0549fd7b9392f7af80e8573776323" }
 paged-scene = { path = "../paged-scene" }
 paged-renderer = { path = "../paged-renderer" }
 paged-compose = { path = "../paged-compose" }

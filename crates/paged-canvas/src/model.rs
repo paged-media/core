@@ -13462,12 +13462,12 @@ fn zip_without(
     let mut out = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
     for i in 0..archive.len() {
         let raw = archive.by_index_raw(i)?;
-        if drop.contains(raw.name()) {
+        if drop.contains(raw.name()?.as_ref()) {
             continue;
         }
-        out.raw_copy_file(raw)?;
+        idml_export::zip_layout::copy_entry(&mut out, raw)?;
     }
-    Ok(out.finish()?.into_inner())
+    Ok(idml_export::zip_layout::finish(out)?)
 }
 
 fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {
@@ -13491,12 +13491,12 @@ fn without_zip_entries(package: &[u8], drop: &[&str]) -> Option<Vec<u8>> {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..src.len() {
         let entry = src.by_index_raw(i).ok()?;
-        if drop.contains(&entry.name()) {
+        if drop.contains(&entry.name().ok()?.as_ref()) {
             continue;
         }
-        out.raw_copy_file(entry).ok()?;
+        idml_export::zip_layout::copy_entry(&mut out, entry).ok()?;
     }
-    Some(out.finish().ok()?.into_inner())
+    idml_export::zip_layout::finish(out).ok()
 }
 
 /// The highest `u<hex>` id spelled by an entry name of `package`
@@ -13513,7 +13513,9 @@ pub(crate) fn source_id_floor(package: &[u8]) -> u64 {
         let Ok(entry) = zip.by_index(i) else {
             continue;
         };
-        let name = entry.name();
+        let Ok(name) = entry.name() else {
+            continue;
+        };
         let stem = match name.rsplit_once('/') {
             Some((_, stem)) => stem,
             None => continue,

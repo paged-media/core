@@ -41,7 +41,7 @@ fn entries(package: &[u8]) -> BTreeMap<String, Vec<u8>> {
             let mut e = zip.by_index(i).expect("entry");
             let mut body = Vec::new();
             e.read_to_end(&mut body).expect("read");
-            (e.name().to_string(), body)
+            (e.name().expect("name").into_owned(), body)
         })
         .collect()
 }
