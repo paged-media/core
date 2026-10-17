@@ -100,6 +100,10 @@ is not written yet.
 | [169](169-update-cross-references.md) | Cross-references: a live page number, and Update Cross-References | Accepted 2026-10-16 |
 | [170](170-endnotes-as-indesign-writes-them.md) | Endnotes, read and numbered as InDesign writes them | Accepted 2026-10-16 |
 | [171](171-pdf-bookmarks.md) | PDF bookmarks, as InDesign exports them | Accepted 2026-10-16 |
+| [172](172-editorial-notes.md) | Editorial notes, kept and edited as InDesign keeps them | Accepted 2026-10-16 |
+| [173](173-bookmarks-edited.md) | Bookmarks created, renamed, moved and deleted as InDesign does it | Accepted 2026-10-16 |
+| [174](174-endnotes-inserted-and-deleted.md) | Endnotes inserted, deleted and converted from footnotes, as InDesign does it | Accepted 2026-10-17 |
+| [175](175-table-row-start.md) | A table row starts where its Start Row option asks, as InDesign sets it | Accepted 2026-10-17 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

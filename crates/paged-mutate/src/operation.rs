@@ -1281,6 +1281,18 @@ pub enum PropertyPath {
     CellRightEdgeStrokeWeight,
     CellRightEdgeStrokeTint,
 
+    // ---- ADR 175 — row placement ----------------------------------
+    // A row's own options, addressed through any `NodeId::TableCell` of
+    // the row (InDesign's `cell.parentRow`).
+    /// `<Row StartRow="…">`: where the row starts. `Value::Text`
+    /// carrying the IDML spelling (`"Anywhere"`, `"NextColumn"`,
+    /// `"NextFrame"`, `"NextPage"`, `"NextOddPage"`, `"NextEvenPage"`);
+    /// empty clears it to the default, `Anywhere`. Reflow-affecting.
+    RowStartRow,
+    /// `<Row KeepWithNextRow="…">`: the row stays in the frame of the row
+    /// after it. `Value::Bool`. Reflow-affecting.
+    RowKeepWithNext,
+
     // ---- Aftercare-A — table dimensions (READ-ONLY) -------------
     // Like `NextTextFrame` / `PreviousTextFrame`, these exist only so
     // the inspector can *read* a table's shape as `PropertyEntry`s:
@@ -1822,6 +1834,8 @@ impl PropertyPath {
             PropertyPath::CellRightEdgeStrokeColor => "cell.rightEdgeStrokeColor",
             PropertyPath::CellRightEdgeStrokeWeight => "cell.rightEdgeStrokeWeight",
             PropertyPath::CellRightEdgeStrokeTint => "cell.rightEdgeStrokeTint",
+            PropertyPath::RowStartRow => "row.startRow",
+            PropertyPath::RowKeepWithNext => "row.keepWithNext",
             // Aftercare-A — table dimensions (read-only).
             PropertyPath::TableRowCount => "table.rowCount",
             PropertyPath::TableColumnCount => "table.columnCount",
@@ -4134,6 +4148,42 @@ pub enum Operation {
         parent: Option<String>,
         #[serde(default)]
         index: Option<u32>,
+    },
+    /// v73 — insert an endnote (ADR 174): its reference at contiguous
+    /// story char `offset` (an endnote reference character) and its range
+    /// `range_id` in the endnote story, after the range of the reference
+    /// before it (the opening mark, its number, the separator, `text`, the
+    /// closing mark). `restore` is inverse-only: the deleted note (JSON),
+    /// put back as it was. The document must hold an endnote story
+    /// (`CreateEndnoteStory`). Inverse: `DeleteEndnote`.
+    InsertEndnote {
+        story_id: String,
+        offset: u32,
+        #[serde(default)]
+        paragraph: Option<u32>,
+        endnote_id: String,
+        range_id: String,
+        text: String,
+        #[serde(default)]
+        restore: Option<String>,
+    },
+    /// v73 — delete endnote `endnote_id`: its reference and its range, with
+    /// the break before it. Inverse: `InsertEndnote` carrying the note.
+    DeleteEndnote {
+        endnote_id: String,
+    },
+    /// v73 — the endnote story a first endnote makes (ADR 174): a page at
+    /// the end (`spread_id` / `page_id`, minted when `None`), text frame
+    /// `frame_id` over its margin box as the `<EndnoteTextFrame>`, and story
+    /// `story_id` in it, the endnote story, holding the title. Inverse: the
+    /// frame's and the page's removal.
+    CreateEndnoteStory {
+        #[serde(default)]
+        spread_id: Option<String>,
+        #[serde(default)]
+        page_id: Option<String>,
+        frame_id: String,
+        story_id: String,
     },
     /// v72 — inverse-only: put the bookmarks, their nesting and the
     /// hyperlink destinations back as captured (`state`, JSON). Inverse:

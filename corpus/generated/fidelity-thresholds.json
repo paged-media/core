@@ -682,6 +682,16 @@
       "rationale": "Added 2026-10-12 (Wave 1 R-06): where a table cell sets its first baseline, asked of InDesign 20.0.1. Page 1: a row per FirstBaselineOffset (Ascent, Cap, X, Leading, Embox, Fixed min 30, Ascent min 30, Cap min 30, Embox in Lora) x top inset {0, 6} x VerticalJustification {Top, Center}, written on the <Cell>, Open Sans / Lora 20 pt, and three em-box/ascent text frames below. Page 2 is the same table with the policy from a <CellStyle>: InDesign sets it identically, but plugin-publish's idml-import does not read a CellStyle's FirstBaselineOffset, so page 2 (mean 1.078) is not gated until that half lands. origin/main's engine (every cell on its ascent; em box = point size): page 1 mean 1.140 / p99 65.829 / SSIM 0.9532. With the cell's policy, the minimum as a floor and the em box at (cap height + 1 em) / 2: 0.147 / 2.961 / 0.9960, every cell within 0.05 pt of InDesign's DOM; sized at worst x 1.20 and SSIM - 0.005. The residue is glyph anti-aliasing. INK GATED 2026-10-13: worst page ink mean 3.520 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. PAGE 2 GATED 2026-10-14: the policy from a cell style — InDesign keeps FirstBaselineOffset / MinimumFirstBaselineOffset on the <CellStyle>, which the reader now takes (plugin-publish) and cells fall back to: p2 1.074 -> 0.129 (ink 26.3 -> 3.2). Both pages now gated; the page-1 budget already covers p2's 0.129 / p99 2.69 / ssim 0.9961 / ink 3.46."
     },
     {
+      "name": "table-start-row",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 36,
+      "max_mean_de": 0.141,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.985,
+      "max_ink_mean_de": 78.934,
+      "rationale": "Added 2026-10-17 (ADR 175): a table row's Start Row option, asked of InDesign 20.0.1. Nine cases, each one story holding one table of 20 pt rows (each grows to 20.826 pt with its Open Sans 12 label), threaded through the start-paragraph fixture's four-page chain (a two-column frame and a one-column frame on page 1, one frame on each of pages 2-4), every case starting on an odd page: R04 Anywhere / NextColumn / NextFrame / NextPage / NextOddPage / NextEvenPage, NextPage on the story's first row, NextColumn on a row that already opens column two, and a header over a row moved to the next frame. InDesign moves the row and every row after it as it moves a paragraph's first line (StartParagraph), leaves the first row and the row already opening column two where they are, and repeats the header in the target frame; the engine matches every row (table_start_row_pipeline pins each to its frame, from table-start-row-probe with PROBE_IN). Before (the attribute was not read): worst page mean 0.433 / p99 0.0 / ssim 0.9719, and the text gate failed on pages 13-22. With the rule: 0.117 / 0.0 / 0.9902, ink 65.778; sized at worst * 1.20, the p99 at the 0.3 floor, ssim - 0.005, ink worst + ~20%. The text gate is hard: 86 lines on 13 pages match."
+    },
+    {
       "name": "table-cell-tints",
       "text_gate": "lines",
       "max_pages_with_pdf": 1,

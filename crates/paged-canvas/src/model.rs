@@ -4653,6 +4653,37 @@ impl CanvasModel {
             Mutation::DeleteNote { note_id } => Some(Operation::DeleteNote {
                 note_id: note_id.clone(),
             }),
+            Mutation::InsertEndnote {
+                story_id,
+                offset,
+                paragraph,
+                text,
+            } => Some(self.lower_insert_endnote(story_id, *offset, *paragraph, text, mint_offset)),
+            Mutation::DeleteEndnote { endnote_id } => Some(Operation::DeleteEndnote {
+                endnote_id: endnote_id.clone(),
+            }),
+            Mutation::ConvertFootnoteToEndnote {
+                story_id,
+                footnote_id,
+            } => {
+                // The footnote's text (after its number and separator) and its
+                // reference's place: the endnote takes both.
+                let note = self
+                    .footnotes()
+                    .into_iter()
+                    .find(|f| f.self_id == *footnote_id && f.story_id == *story_id)?;
+                let insert =
+                    self.lower_insert_endnote(story_id, note.offset, None, &note.text, mint_offset);
+                let mut ops = vec![Operation::RemoveFootnote {
+                    story_id: story_id.clone(),
+                    footnote_id: footnote_id.clone(),
+                }];
+                match insert {
+                    Operation::Batch { ops: more } => ops.extend(more),
+                    one => ops.push(one),
+                }
+                Some(Operation::Batch { ops })
+            }
             Mutation::CreateBookmark {
                 name,
                 page,
@@ -8464,6 +8495,7 @@ impl CanvasModel {
             .cells
             .iter()
             .find(|c| c.coords() == Some((col, row)))?;
+        let row_def = table.rows.get(row as usize);
         let entries = vec![
             PropertyEntry {
                 path: PropertyPath::CellFillColor,
@@ -8552,6 +8584,24 @@ impl CanvasModel {
             PropertyEntry {
                 path: PropertyPath::CellRightEdgeStrokeTint,
                 value: Some(Value::Length(cell.right_edge_stroke_tint)),
+            },
+            // ADR 175 — the cell's row: where it starts, and whether it
+            // keeps with the next.
+            PropertyEntry {
+                path: PropertyPath::RowStartRow,
+                value: Some(Value::Text(
+                    row_def
+                        .and_then(|r| r.start_row)
+                        .unwrap_or_default()
+                        .as_idml()
+                        .to_string(),
+                )),
+            },
+            PropertyEntry {
+                path: PropertyPath::RowKeepWithNext,
+                value: Some(Value::Bool(
+                    row_def.and_then(|r| r.keep_with_next_row).unwrap_or(false),
+                )),
             },
         ];
         Some(ElementProperties {
@@ -9210,6 +9260,116 @@ impl CanvasModel {
     /// story char (contiguous) of its marker: the k-th marker of its
     /// paragraph when the paragraph holds one per note, its anchor
     /// otherwise; its label and page come from the last layout.
+    /// ADR 174 — every endnote, in reference order (stories in document
+    /// order). Its text is its range's in the endnote story, without the
+    /// marks, the number and the separator.
+    pub fn endnotes(&self) -> Vec<crate::channel::EndnoteSummary> {
+        let scene = &self.scene;
+        let options = scene.designmap.endnote_options.clone().unwrap_or_default();
+        let separator = options
+            .separator_text
+            .clone()
+            .unwrap_or_else(|| "\t".to_string());
+        let ordinals = scene.endnote_ordinals();
+        // Each range's text, by its source endnote.
+        let mut texts: HashMap<String, String> = HashMap::new();
+        for s in scene.stories.iter().filter(|s| s.story.is_endnote_story) {
+            for p in &s.story.paragraphs {
+                let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+                for (k, piece) in text
+                    .split(paged_model::ENDNOTE_NUMBER_MARKER)
+                    .skip(1)
+                    .enumerate()
+                {
+                    let body = piece.split('\u{FEFF}').next().unwrap_or("");
+                    let body = body.strip_prefix(separator.as_str()).unwrap_or(body);
+                    if let Some(source) = p.endnote_ranges.get(k).and_then(|r| r.source.clone()) {
+                        texts.insert(source, body.to_string());
+                    }
+                }
+            }
+        }
+        let mark = paged_model::ENDNOTE_REFERENCE_MARKER;
+        let mut out = Vec::new();
+        for story in &scene.stories {
+            let mut start = 0u32;
+            for para in &story.story.paragraphs {
+                let markers: Vec<u32> = para
+                    .runs
+                    .iter()
+                    .flat_map(|r| r.text.chars())
+                    .enumerate()
+                    .filter(|(_, c)| *c == mark)
+                    .map(|(i, _)| i as u32)
+                    .collect();
+                for (k, r) in para.endnote_references.iter().enumerate() {
+                    out.push(crate::channel::EndnoteSummary {
+                        id: r.self_id.clone(),
+                        story_id: story.self_id.clone(),
+                        offset: start + markers.get(k).copied().unwrap_or(0),
+                        range_id: r.text_range.clone(),
+                        label: ordinals
+                            .get(&r.self_id)
+                            .map(|n| options.reference_label(*n)),
+                        text: texts.get(&r.self_id).cloned().unwrap_or_default(),
+                    });
+                }
+                start += para
+                    .runs
+                    .iter()
+                    .map(|r| r.text.chars().count() as u32)
+                    .sum::<u32>();
+            }
+        }
+        out
+    }
+
+    /// The `Operation`s an endnote insert lowers to (ADR 174): the endnote
+    /// story first when the document has none, as InDesign makes it.
+    fn lower_insert_endnote(
+        &self,
+        story_id: &str,
+        offset: u32,
+        paragraph: Option<u32>,
+        text: &str,
+        mint_offset: &mut u64,
+    ) -> paged_mutate::Operation {
+        use paged_mutate::Operation;
+        let endnote_id = self.mint_page_item_id_with_offset(mint_offset);
+        let range_id = self.mint_page_item_id_with_offset(mint_offset);
+        let insert = Operation::InsertEndnote {
+            story_id: story_id.to_string(),
+            offset,
+            paragraph,
+            endnote_id,
+            range_id,
+            text: text.to_string(),
+            restore: None,
+        };
+        if self.scene.stories.iter().any(|s| s.story.is_endnote_story) {
+            return insert;
+        }
+        let frame_id = self.mint_page_item_id_with_offset(mint_offset);
+        let mut n = self.story_id_floor() + *mint_offset as usize;
+        let mut new_story = format!("Story/u{n}");
+        while self.scene.stories.iter().any(|s| s.self_id == new_story) {
+            n += 1;
+            new_story = format!("Story/u{n}");
+        }
+        *mint_offset += 1;
+        Operation::Batch {
+            ops: vec![
+                Operation::CreateEndnoteStory {
+                    spread_id: None,
+                    page_id: None,
+                    frame_id,
+                    story_id: new_story,
+                },
+                insert,
+            ],
+        }
+    }
+
     pub fn notes(&self) -> Vec<crate::channel::NoteSummary> {
         let mut out = Vec::new();
         for story in &self.scene.stories {
@@ -9860,6 +10020,7 @@ impl CanvasModel {
             IndexTopics => serde_json::to_value(self.index_topics()).unwrap_or_default(),
             Footnotes => serde_json::to_value(self.footnotes()).unwrap_or_default(),
             Notes => serde_json::to_value(self.notes()).unwrap_or_default(),
+            Endnotes => serde_json::to_value(self.endnotes()).unwrap_or_default(),
             Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
             Sections => serde_json::to_value(self.sections()).unwrap_or_default(),
             Stories => serde_json::to_value(self.stories()).unwrap_or_default(),

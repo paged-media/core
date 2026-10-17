@@ -1738,6 +1738,41 @@ fn text_cases(c: &mut Vec<Case>) {
             bookmark_id: m.bookmarks()[0].self_id.clone(),
         },
     ));
+    // ADR 174 — an endnote prints its number at its reference and its
+    // range in the endnote story; the first one makes the story's page.
+    c.push(paints("InsertEndnote", "endnotes", |_| {
+        Mutation::InsertEndnote {
+            story_id: paged_gen::samples::endnotes::story_id("Body"),
+            offset: 4,
+            paragraph: None,
+            text: "A new endnote.".into(),
+        }
+    }));
+    c.push(paints("DeleteEndnote", "endnotes", |m| {
+        Mutation::DeleteEndnote {
+            endnote_id: m.endnotes()[0].id.clone(),
+        }
+    }));
+    c.push(paints("ConvertFootnoteToEndnote", "text", |m| {
+        let (story_id, chars) = biggest_story(m);
+        m.apply_mutation(&Mutation::InsertFootnote {
+            story_id: story_id.clone(),
+            offset: chars.min(12),
+            paragraph: None,
+            text: "A note.".into(),
+        })
+        .expect("seed a footnote");
+        let footnote_id = m
+            .footnotes()
+            .into_iter()
+            .find(|f| f.story_id == story_id)
+            .expect("the seeded note")
+            .self_id;
+        Mutation::ConvertFootnoteToEndnote {
+            story_id,
+            footnote_id,
+        }
+    }));
     c.push(paints("ConvertNoteToText", "notes", |m| {
         Mutation::ConvertNoteToText {
             note_id: m.notes()[0].id.clone(),

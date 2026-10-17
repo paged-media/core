@@ -7499,6 +7499,12 @@ pub struct TableRow {
     /// frame together. `None` ⇒ `false`, the IDML default.
     #[serde(default)]
     pub keep_with_next_row: Option<bool>,
+    /// `StartRow`: where the row starts. InDesign 20.0.1 sets it as a
+    /// paragraph's `StartParagraph` (ADR 175): the row, and every row
+    /// after it, moves to the next column, frame or page, or to the next
+    /// page of the asked parity. `None` ⇒ `Anywhere`, the IDML default.
+    #[serde(default)]
+    pub start_row: Option<StartParagraph>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableColumn {
@@ -8262,6 +8268,12 @@ pub struct Spread {
     /// Empty when no page declared margins.
     #[serde(default)]
     pub page_margins: std::collections::HashMap<String, MarginPreference>,
+    /// The `Self` ids of this spread's text frames that are
+    /// `<EndnoteTextFrame>`s, the frame InDesign hosts the endnote story in
+    /// (ADR 170; a first endnote makes one, ADR 174). Side list, like
+    /// [`Spread::page_margins`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endnote_frames: Vec<String>,
     /// Per-object `Properties/Label` `KeyValuePair`s, keyed by the
     /// host item's `Self` id — IDML's native extension point (the
     /// plugin-metadata carrier; InDesign preserves Labels verbatim).

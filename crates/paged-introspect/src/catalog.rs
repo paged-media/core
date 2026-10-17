@@ -472,6 +472,12 @@ fn host_functions() -> Vec<HostFn> {
            "Delete a bookmark and the bookmarks under it, and the page destinations nothing else goes to. Undo puts them back."),
         f!("paged.renameBookmark", "(bookmarkId, name)", "bool", "author",
            "Rename a bookmark."),
+        f!("paged.insertEndnote", "(storyId, offset, text)", "string|null", "author",
+           "Insert an endnote at a story offset: its reference there and its range in the endnote story, after the note before it, as InDesign writes one. The first endnote makes the endnote story on a page of its own. Returns the endnote's id; read them with paged.collection(\"endnotes\")."),
+        f!("paged.deleteEndnote", "(endnoteId)", "bool", "author",
+           "Delete an endnote: its reference and its range. Undo puts both back as they were."),
+        f!("paged.convertFootnoteToEndnote", "(storyId, footnoteId)", "string|null", "author",
+           "Convert a footnote to an endnote: the footnote goes and an endnote of its text takes its reference's place. Returns the endnote's id."),
         f!("paged.moveBookmark", "(bookmarkId, parentId?, index?)", "bool", "author",
            "Move a bookmark with the bookmarks under it: under another bookmark (the top level for null), at an index among its siblings."),
         // --- layer attributes ---
@@ -843,6 +849,9 @@ property_paths! {
         CellRightEdgeStrokeColor => "cellRightEdgeStrokeColor" : color().idml(idml![attr(Cell | CellStyle, RightEdgeStrokeColor)]),
         CellRightEdgeStrokeWeight => "cellRightEdgeStrokeWeight" : length_pos().idml(idml![attr(Cell | CellStyle, RightEdgeStrokeWeight)]),
         CellRightEdgeStrokeTint => "cellRightEdgeStrokeTint" : pct().default_num(100.0).idml(idml![attr(Cell, RightEdgeStrokeTint)]),
+        // ADR 175 — a row's own options, written through any of its cells.
+        RowStartRow => "rowStartRow" : enum_(START_PARAGRAPH).default_text("Anywhere").idml(idml![attr(Row, StartRow)]),
+        RowKeepWithNext => "rowKeepWithNext" : bool_().default_bool(false).idml(idml![attr(Row, KeepWithNextRow)]),
         PluginMetadata => "pluginMetadata" : structure("PluginMetadata", Wire::PluginMetadata).required(),
         AnchoredPosition => "anchoredPosition" : enum_open(ANCHORED_POSITIONS).default_text("InlinePosition").idml(idml![attr(AnchoredObjectSetting, AnchoredPosition)]),
         AnchorPoint => "anchorPoint" : enum_open(REFERENCE_POINTS).idml(idml![attr(AnchoredObjectSetting, AnchorPoint)]),
@@ -1359,7 +1368,10 @@ mod tests {
         //
         // 239 -> 241: ADR 158 — a paragraph's level in a multi-level list
         // and whether its restart policy applies.
-        assert_eq!(cat.settable_paths.len(), 241, "settable path count drifted");
+        //
+        // 241 -> 243: ADR 175 — a table row's start rule and its keep with
+        // the next row, written through any cell of the row.
+        assert_eq!(cat.settable_paths.len(), 243, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings
