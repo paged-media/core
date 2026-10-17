@@ -157,6 +157,39 @@ impl Repository {
         }))
     }
 
+    /// Every object an export of `target` will read that has not been handed
+    /// over, as JSON `[{hash, pack, offset, len}]`: read them in one pass
+    /// rather than faulting them in one export at a time.
+    pub fn wanted(&self, target: &str, with_history: bool) -> Result<String, JsError> {
+        let heads: Vec<Hash> = if with_history {
+            self.repo.store.refs().into_iter().map(|(_, h)| h).collect()
+        } else {
+            vec![match self.repo.head(target) {
+                Some(h) => h,
+                None => hash(target)?,
+            }]
+        };
+        // Only the target's own tree unless the history travels too.
+        let objects = if with_history {
+            paged_repo::reachable(&self.repo.store, &heads, |_| false).map_err(js)?
+        } else {
+            paged_repo::reachable(&self.repo.store, &heads, |c| *c != heads[0]).map_err(js)?
+        };
+        let locs: Vec<LocJs> = objects
+            .into_iter()
+            .filter(|(_, h)| !self.repo.store.holds(h))
+            .filter_map(|(_, h)| {
+                self.repo.store.locate(&h).map(|l| LocJs {
+                    hash: h.to_hex(),
+                    pack: l.pack,
+                    offset: l.offset as f64,
+                    len: l.len,
+                })
+            })
+            .collect();
+        Ok(json(&locs))
+    }
+
     pub fn provide(&mut self, address: &str, bytes: Vec<u8>) -> Result<(), JsError> {
         self.repo.store.provide(hash(address)?, bytes).map_err(js)
     }

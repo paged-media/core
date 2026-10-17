@@ -155,6 +155,11 @@ impl PackStore {
             .collect()
     }
 
+    /// Whether the store holds `hash`'s bytes (rather than only knowing where they are).
+    pub fn holds(&self, hash: &Hash) -> bool {
+        self.cache.contains_key(hash)
+    }
+
     /// Hands over an object read from its pack, checked against its address.
     pub fn provide(&mut self, hash: Hash, bytes: Vec<u8>) -> Result<(), Error> {
         let loc = self.index.get(&hash).ok_or(Error::Missing(hash))?;
