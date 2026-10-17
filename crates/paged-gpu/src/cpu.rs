@@ -4266,6 +4266,7 @@ mod tests {
                 paint,
                 unicode: Some('x'),
                 is_stroke: false,
+                structure: table.current,
             });
             list.glyph_runs = Some(table);
         }

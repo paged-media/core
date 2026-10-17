@@ -104,6 +104,7 @@ is not written yet.
 | [173](173-bookmarks-edited.md) | Bookmarks created, renamed, moved and deleted as InDesign does it | Accepted 2026-10-16 |
 | [174](174-endnotes-inserted-and-deleted.md) | Endnotes inserted, deleted and converted from footnotes, as InDesign does it | Accepted 2026-10-17 |
 | [175](175-table-row-start.md) | A table row starts where its Start Row option asks, as InDesign sets it | Accepted 2026-10-17 |
+| [182](182-tagged-pdf.md) | Create Tagged PDF: stories and paragraphs as InDesign tags them | Accepted 2026-10-18 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

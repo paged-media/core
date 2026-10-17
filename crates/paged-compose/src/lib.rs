@@ -39,7 +39,8 @@ pub use display_list::{
     GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, ImageId, InnerGlow,
     InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, LinkRegion, LinkRegionTable,
     LinkTarget, OuterGlow, Paint, PathBuffer, PathData, PathId, PathSegment, RadialGradient, Rect,
-    Satin, SoftMaskType, SpotInk, SpotInkId, Stroke, StrokeMarks, SweepGradient, Transform,
+    Satin, SoftMaskType, SpotInk, SpotInkId, Stroke, StrokeMarks, StructKey, SweepGradient,
+    Transform,
 };
 pub use extent::{
     fit_transparency_group_bounds, transparency_group_overflow, GroupFit, GROUP_AA_PAD_PT,

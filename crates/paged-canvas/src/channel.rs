@@ -901,6 +901,11 @@ pub struct ExportPdfWireOptions {
     /// print presets.
     #[serde(default)]
     pub bookmarks: bool,
+    /// ADR 182 — Create Tagged PDF: the document's logical structure
+    /// (stories and their paragraphs) with `/MarkInfo` and `/Lang`. Off
+    /// by default, as in InDesign's print presets.
+    #[serde(default)]
+    pub tagged: bool,
 }
 
 /// panels.md gap 20 — one structured PDF-export preflight finding for

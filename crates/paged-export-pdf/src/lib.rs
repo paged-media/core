@@ -143,6 +143,14 @@ pub struct ExportOptions {
     /// The PDF's bookmarks (`/Outlines`), in document order: InDesign's
     /// Include Bookmarks (ADR 171). Empty writes none.
     pub bookmarks: Vec<PdfBookmark>,
+    /// Create Tagged PDF (ADR 182): the logical structure InDesign
+    /// writes — Document, one Article, a Story per text story and a
+    /// paragraph element per paragraph, each holding its text's marked
+    /// content — with `/MarkInfo`, `/Lang` and the document title shown.
+    pub tagged: bool,
+    /// The document's language for `/Lang` (a BCP 47 tag such as
+    /// `en-US`), when known.
+    pub lang: Option<String>,
 }
 
 /// One PDF bookmark: an outline item going to a page, as InDesign 20.0.1
@@ -176,6 +184,8 @@ impl Default for ExportOptions {
             effect_dpi: 150.0,
             title: None,
             bookmarks: Vec::new(),
+            tagged: false,
+            lang: None,
         }
     }
 }
