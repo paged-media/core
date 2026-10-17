@@ -937,6 +937,46 @@
       "min_ssim": 0.9907,
       "max_ink_mean_de": 14.17,
       "rationale": "Added 2026-10-16 (R-08, L-04, ADR 165): a table of contents that is out of date, asked of InDesign 20.0.1. Four 400 x 300 pt pages, Inter: a body story threaded over pages 1-3 with headings at three levels, and on page 4 a TOC story bound to TOCStyle/Contents (InDesign's spelling) whose stored entries are stale (a renamed heading, a wrong page). InDesign prints the stored entries (Contents / Getting Started 7 / An Old Heading 8), and so does the engine: no entry is rebuilt at render. Page measures mean 0.155, p99 1.20, ssim 0.9957, ink 11.80 (pages 1-2: 16 pt heading glyph edges; every line at InDesign's rows and extents); sized at worst x 1.20, ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "index",
+      "text_gate": true,
+      "max_pages_with_pdf": 4,
+      "max_mean_de": 0.016,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9949,
+      "max_ink_mean_de": 3.16,
+      "rationale": "Added 2026-10-16 (ADR 168): an index to generate, asked of InDesign 20.0.1. Four 400 x 300 pt pages, Inter: a body story threaded over pages 1-3 with page references to nested topics in InDesign's spelling (ReferencedTopic, each in a range of its own), and on page 4 a story with a stale index (Index / Apples 9). InDesign prints the stored text, and so does the engine. Page measures mean 0.0131, p99 0, ssim 0.9999, ink 2.63; sized at worst x 1.20 (p99 at its 0.3 floor), ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "xref",
+      "text_gate": true,
+      "max_pages_with_pdf": 3,
+      "max_mean_de": 0.0502,
+      "max_p99_de": 0.762,
+      "min_ssim": 0.9947,
+      "max_ink_mean_de": 5.53,
+      "rationale": "Added 2026-10-16 (ADR 169): cross-references that are out of date, asked of InDesign 20.0.1. Three 400 x 300 pt pages, Inter: page 1 holds one reference per English default format to a numbered heading on page 2 and one to a text anchor there, each source's text stale (Old Heading, a page-number variable storing 9). InDesign prints the stored text but the live page number (page 2), and so does the engine (the XRefPageNumber is resolved from the destination's laid-out page). Page measures mean 0.0418, p99 0.635, ssim 0.9997, ink 4.60; sized at worst x 1.20, ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "endnotes",
+      "text_gate": true,
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 0.041,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9947,
+      "max_ink_mean_de": 4.0,
+      "rationale": "Added 2026-10-16 (ADR 170): endnotes as InDesign writes them, asked of InDesign 20.0.1. Two 400 x 300 pt pages, Inter: three <Endnote> references on page 1, the endnote story (IsEndnoteStory) in an <EndnoteTextFrame> on page 2, numbering from 3 in lower roman. InDesign prints iii, iv, v at the references and the notes, and so does the engine (main's engine printed no number and placed no endnote story). Page measures mean 0.0341, p99 0, ssim 0.9997, ink 3.33; sized at worst x 1.20 (p99 at its 0.3 floor), ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "notes",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.0418,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9944,
+      "max_ink_mean_de": 3.35,
+      "rationale": "Added 2026-10-16 (ADR 172): editorial notes as InDesign writes them, asked of InDesign 20.0.1 (notes-probe; with PROBE_IN InDesign reads all four of the sample's notes, at story offsets 15, 26, 57 and 74). One 400 x 300 pt page, Inter: two paragraphs holding four <Note>s, one inside a word, one between words, one of two paragraphs, one ending the story. InDesign prints none of them, and neither does the engine (a note is one character of the text that prints nothing). Page measures mean 0.0348, p99 0, ssim 0.9994, ink 2.79; sized at worst x 1.20 (p99 at its 0.3 floor), ssim - 0.005. Text gate on."
     }
   ]
 }

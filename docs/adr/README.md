@@ -96,6 +96,10 @@ is not written yet.
 | [165](165-update-table-of-contents.md) | Update Table of Contents, as InDesign writes it | Accepted 2026-10-16 |
 | [166](166-a-ruby-wider-than-its-base.md) | A ruby wider than its base, and kana at their proportional widths | Accepted 2026-10-16 |
 | [167](167-japanese-lines-and-vertical-text.md) | Japanese lines, and vertical text as horizontal text turned | Accepted 2026-10-16 |
+| [168](168-generate-index.md) | Generate Index, as InDesign writes it | Accepted 2026-10-16 |
+| [169](169-update-cross-references.md) | Cross-references: a live page number, and Update Cross-References | Accepted 2026-10-16 |
+| [170](170-endnotes-as-indesign-writes-them.md) | Endnotes, read and numbered as InDesign writes them | Accepted 2026-10-16 |
+| [171](171-pdf-bookmarks.md) | PDF bookmarks, as InDesign exports them | Accepted 2026-10-16 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

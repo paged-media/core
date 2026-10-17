@@ -707,6 +707,149 @@ impl Document {
         out
     }
 
+    /// The index as Generate Index lists it (ADR 168): every topic that
+    /// has a page reference, a cross-reference or a subtopic that does,
+    /// in InDesign's order — level 1 topics sorted by their sort key
+    /// (`SortOrder`, else the name; case-insensitive), each followed by
+    /// its subtopics, sorted the same way. A topic's pages come from the
+    /// paragraphs its references stand in, laid out where `laid_out` says
+    /// (else its story's head frame), each page once, ascending.
+    ///
+    /// A reference names its topic by id (`ReferencedTopic`, InDesign's
+    /// spelling, or `AppliedTopic`) or, in the engine's older spelling,
+    /// by `TopicName` alone, which makes a level 1 topic of that name.
+    pub fn resolve_index_tree_on(&self, laid_out: &ParagraphPages) -> Vec<IndexTreeEntry> {
+        use std::collections::{BTreeSet, HashMap};
+        let dm = &self.designmap;
+        // Topic id → (name, sort key, parent).
+        let mut topics: HashMap<String, (String, String, Option<String>)> = HashMap::new();
+        for t in &dm.index_topics {
+            let name = t.name.clone().unwrap_or_default();
+            let sort = t
+                .sort_order
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| name.clone());
+            topics.insert(
+                t.self_id.clone(),
+                (name, sort, dm.index_topic_parents.get(&t.self_id).cloned()),
+            );
+        }
+        let mut pages: HashMap<String, BTreeSet<usize>> = HashMap::new();
+        let mut referenced: BTreeSet<String> = BTreeSet::new();
+        let body_page_index = self.body_page_index_map();
+        let mut visit =
+            |marker: &paged_model::IndexMarker,
+             page: Option<usize>,
+             topics: &mut HashMap<String, (String, String, Option<String>)>| {
+                let id = match marker.applied_topic.as_deref() {
+                    Some(id) if topics.contains_key(id) => id.to_string(),
+                    _ => {
+                        // The older spelling: a level 1 topic by name.
+                        let key = format!("name:{}", marker.topic_name.to_lowercase());
+                        topics.entry(key.clone()).or_insert_with(|| {
+                            let sort = marker
+                                .sort_order
+                                .clone()
+                                .unwrap_or_else(|| marker.topic_name.clone());
+                            (marker.topic_name.clone(), sort, None)
+                        });
+                        key
+                    }
+                };
+                referenced.insert(id.clone());
+                if let Some(p) = page {
+                    pages.entry(id).or_default().insert(p);
+                }
+            };
+        for parsed in &self.stories {
+            let head_page = body_page_index.get(&parsed.self_id).copied();
+            let story_pages = laid_out.get(&parsed.self_id);
+            for (i, paragraph) in parsed.story.paragraphs.iter().enumerate() {
+                let page = story_pages.and_then(|m| m.get(&i).copied()).or(head_page);
+                for marker in &paragraph.index_markers {
+                    visit(marker, page, &mut topics);
+                }
+                if let Some(table) = paragraph.table.as_ref() {
+                    for cell in &table.cells {
+                        for cell_para in &cell.paragraphs {
+                            for marker in &cell_para.index_markers {
+                                visit(marker, page, &mut topics);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // A topic is listed when it, or a subtopic, has a reference or a
+        // cross-reference.
+        let mut listed: BTreeSet<String> = referenced;
+        for x in &dm.index_cross_references {
+            listed.insert(x.topic.clone());
+        }
+        for id in listed.clone() {
+            let mut at = topics.get(&id).and_then(|t| t.2.clone());
+            while let Some(parent) = at {
+                at = topics.get(&parent).and_then(|t| t.2.clone());
+                listed.insert(parent);
+            }
+        }
+        let key = |id: &String| {
+            topics
+                .get(id)
+                .map(|t| (t.1.to_lowercase(), t.0.clone()))
+                .unwrap_or_default()
+        };
+        let mut children: HashMap<Option<String>, Vec<String>> = HashMap::new();
+        for id in listed.iter().filter(|id| topics.contains_key(*id)) {
+            children
+                .entry(topics[id].2.clone())
+                .or_default()
+                .push(id.clone());
+        }
+        for list in children.values_mut() {
+            list.sort_by_key(|id| key(id));
+        }
+        let mut out: Vec<IndexTreeEntry> = Vec::new();
+        let mut stack: Vec<(String, u32)> = children
+            .get(&None)
+            .map(|l| l.iter().rev().map(|id| (id.clone(), 1)).collect())
+            .unwrap_or_default();
+        while let Some((id, level)) = stack.pop() {
+            let (name, sort, _) = topics[&id].clone();
+            out.push(IndexTreeEntry {
+                level,
+                topic: name,
+                sort_key: sort,
+                pages: pages
+                    .get(&id)
+                    .map(|p| p.iter().copied().collect())
+                    .unwrap_or_default(),
+                cross_references: dm
+                    .index_cross_references
+                    .iter()
+                    .filter(|x| x.topic == id)
+                    .map(|x| IndexCrossRef {
+                        kind: x.kind.clone().unwrap_or_else(|| "See".to_string()),
+                        custom: x.custom_type_string.clone(),
+                        target: x
+                            .referenced_topic
+                            .as_ref()
+                            .and_then(|t| topics.get(t))
+                            .map(|t| t.0.clone())
+                            .unwrap_or_default(),
+                    })
+                    .collect(),
+            });
+            if let Some(kids) = children.get(&Some(id.clone())) {
+                for kid in kids.iter().rev() {
+                    stack.push((kid.clone(), level + 1));
+                }
+            }
+        }
+        out
+    }
+
     /// Internal — walk one paragraph's `index_markers` and fold them
     /// into the topic accumulator. Pulled out so the table-cell
     /// loop can reuse it.
@@ -729,6 +872,38 @@ impl Document {
                 entry.pages.push(p);
             }
         }
+    }
+
+    /// Each endnote's ordinal (1-based) by its `<Endnote>` `Self` (ADR
+    /// 170): its place in the endnote story, which InDesign keeps in
+    /// reference order; for a reference no endnote story lists, its place
+    /// among the document's references in story order after them.
+    pub fn endnote_ordinals(&self) -> HashMap<String, u32> {
+        let mut out: HashMap<String, u32> = HashMap::new();
+        let mut next = 1u32;
+        for parsed in self.stories.iter().filter(|s| s.story.is_endnote_story) {
+            for p in &parsed.story.paragraphs {
+                for range in &p.endnote_ranges {
+                    if let Some(source) = &range.source {
+                        out.entry(source.clone()).or_insert_with(|| {
+                            next += 1;
+                            next - 1
+                        });
+                    }
+                }
+            }
+        }
+        for parsed in &self.stories {
+            for p in &parsed.story.paragraphs {
+                for r in &p.endnote_references {
+                    out.entry(r.self_id.clone()).or_insert_with(|| {
+                        next += 1;
+                        next - 1
+                    });
+                }
+            }
+        }
+        out
     }
 
     /// Resolve a `<TOCStyle>` into a flat ordered list of TOC entries.
@@ -1003,6 +1178,31 @@ pub struct IndexEntry {
     /// for this topic. Deduplicated + ascending. May be empty when
     /// every host story is orphan (no on-page frames).
     pub pages: Vec<usize>,
+}
+
+/// One entry of the index as Generate Index lists it
+/// ([`Document::resolve_index_tree_on`], ADR 168), in output order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexTreeEntry {
+    /// 1 for a topic, 2 for its subtopic, and so on.
+    pub level: u32,
+    pub topic: String,
+    /// The topic's `SortOrder`, else its name.
+    pub sort_key: String,
+    /// Body page indices of its references, each once, ascending.
+    pub pages: Vec<usize>,
+    pub cross_references: Vec<IndexCrossRef>,
+}
+
+/// A See / See also reference of an [`IndexTreeEntry`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexCrossRef {
+    /// `CrossReferenceType` (`See`, `SeeAlso`, …).
+    pub kind: String,
+    /// The words of a custom reference.
+    pub custom: Option<String>,
+    /// The referenced topic's name.
+    pub target: String,
 }
 
 impl ResolvedRunAttrs {

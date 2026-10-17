@@ -121,6 +121,35 @@ impl ListLevels {
 /// [`list_prefix`] with the story's multi-level counts: a paragraph's
 /// `NumberingLevel` above 1 numbers on its own level, and the expression's
 /// `^1` … `^9` print each level's number.
+/// The list label each paragraph of `story` carries (ADR 169): its
+/// marker text as the emitter numbers the story's paragraphs in order
+/// (`1.⇥` for InDesign's default `^#.^t`), `None` for a paragraph in no
+/// list or with no text. A list continued from another story is counted
+/// within this story alone.
+pub fn story_list_labels(
+    document: &paged_scene::Document,
+    story: &paged_model::Story,
+) -> Vec<Option<String>> {
+    let mut counter = 0u32;
+    let mut prev_was_numbered = false;
+    let mut levels = ListLevels::default();
+    story
+        .paragraphs
+        .iter()
+        .map(|p| {
+            let attrs = document.resolved_paragraph_attrs(p);
+            let label = list_prefix_with_levels(
+                &attrs,
+                &mut counter,
+                &mut prev_was_numbered,
+                None,
+                &mut levels,
+            );
+            label.filter(|_| !p.runs.is_empty())
+        })
+        .collect()
+}
+
 pub(super) fn list_prefix_with_levels(
     p: &paged_scene::ResolvedParagraphAttrs,
     counter: &mut u32,

@@ -13,7 +13,9 @@
 #  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
 #
 
-# Ask InDesign what Generate Index writes; see index-probe.jsx.
+# Ask InDesign what Generate Index writes; see index-probe.jsx. With
+# PROBE_IN=<absolute .idml> in the environment it opens that document
+# (core's `index` sample) instead of building one.
 # Writes index-probe.json, and InDesign's IDML and PDF of the document to
 # the second and third arguments (default temporary files). Pass absolute
 # paths. Takes the InDesign GUI for a few seconds; take the shared lock:
@@ -30,6 +32,7 @@ APP="${INDESIGN_APP:-Adobe InDesign 2025}"
 SHIM="$(mktemp -t paged-index-shim).jsx"
 trap 'rm -f "$SHIM"' EXIT
 cat > "$SHIM" <<JSX
+var PROBE_IN = "${PROBE_IN:-}";
 var PROBE_OUT = "$OUT";
 var PROBE_IDML = "$IDML";
 var PROBE_PDF = "$PDF";

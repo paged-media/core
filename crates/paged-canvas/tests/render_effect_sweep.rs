@@ -1562,7 +1562,7 @@ fn text_cases(c: &mut Vec<Case>) {
             }
         },
     ));
-    // v73 (ADR 164) — a link is a region beside the display list (see
+    // v0.71.13 (ADR 164) — a link is a region beside the display list (see
     // `InsertHyperlink`), and deleting one leaves its runs split where the
     // insert split them: the glyph stream is the one already drawn.
     c.push(inert(
@@ -1616,14 +1616,24 @@ fn text_cases(c: &mut Vec<Case>) {
             }
         },
     ));
-    // v73 (ADR 165) — the TOC story's stale entries give way to the
+    // v0.71.13 (ADR 165) — the TOC story's stale entries give way to the
     // headings where they now stand.
     c.push(paints("UpdateTableOfContents", "toc", |_| {
         Mutation::UpdateTableOfContents {
             story_id: paged_gen::samples::toc::story_id("Contents"),
         }
     }));
-    // v73 (ADR 163) — a footnote: its reference prints in the text, its
+    // v72 (ADR 168) — the stale index gives way to the generated one.
+    c.push(paints("GenerateIndex", "index", |_| {
+        Mutation::GenerateIndex {
+            story_id: paged_gen::samples::index::story_id("Index"),
+        }
+    }));
+    // ADR 169 — stale cross-reference text gives way to its destination's.
+    c.push(paints("UpdateCrossReferences", "xref", |_| {
+        Mutation::UpdateCrossReferences { source_id: None }
+    }));
+    // v0.71.13 (ADR 163) — a footnote: its reference prints in the text, its
     // note at the frame's foot; deleting one takes both away.
     c.push(paints("InsertFootnote", "text", |m| {
         let (story_id, chars) = biggest_story(m);
@@ -1652,6 +1662,85 @@ fn text_cases(c: &mut Vec<Case>) {
         Mutation::DeleteFootnote {
             story_id,
             footnote_id,
+        }
+    }));
+    // ADR 172 — an editorial note prints nothing (InDesign's PDF of the
+    // `notes` sample prints none of its four); Convert to Text prints it.
+    c.push(inert(
+        "InsertNote",
+        "notes",
+        "a note is a character of the text that prints nothing, as InDesign prints none",
+        |_| Mutation::InsertNote {
+            story_id: paged_gen::samples::notes::story_id(),
+            offset: 4,
+            paragraph: None,
+            text: "A new note.".into(),
+            user: None,
+            date: None,
+        },
+    ));
+    c.push(inert(
+        "EditNote",
+        "notes",
+        "a note's text prints nowhere, so rewriting it moves no line",
+        |m| Mutation::EditNote {
+            note_id: m.notes()[0].id.clone(),
+            text: "Rewritten.".into(),
+            date: None,
+        },
+    ));
+    c.push(inert(
+        "DeleteNote",
+        "notes",
+        "the note's character printed nothing, so taking it out moves no line",
+        |m| Mutation::DeleteNote {
+            note_id: m.notes()[0].id.clone(),
+        },
+    ));
+    // ADR 173 — bookmarks print nothing; a PDF export writes them as its
+    // outline when it runs (`export_bookmarks`, `bookmark_ops`).
+    c.push(inert(
+        "CreateBookmark",
+        "navigation",
+        "a bookmark prints nowhere on the page; the PDF outline reads it at export",
+        |m| Mutation::CreateBookmark {
+            name: "New".into(),
+            page: Some(paged_canvas::PageId(m.pages()[0].self_id.clone())),
+            destination: None,
+            parent: None,
+            index: None,
+        },
+    ));
+    c.push(inert(
+        "RenameBookmark",
+        "navigation",
+        "a bookmark's name prints nowhere on the page",
+        |m| Mutation::RenameBookmark {
+            bookmark_id: m.bookmarks()[0].self_id.clone(),
+            name: "Renamed".into(),
+        },
+    ));
+    c.push(inert(
+        "MoveBookmark",
+        "navigation",
+        "the bookmark tree prints nowhere on the page",
+        |m| Mutation::MoveBookmark {
+            bookmark_id: m.bookmarks()[0].self_id.clone(),
+            parent: None,
+            index: None,
+        },
+    ));
+    c.push(inert(
+        "DeleteBookmark",
+        "navigation",
+        "a bookmark prints nowhere on the page, and its text destination stays",
+        |m| Mutation::DeleteBookmark {
+            bookmark_id: m.bookmarks()[0].self_id.clone(),
+        },
+    ));
+    c.push(paints("ConvertNoteToText", "notes", |m| {
+        Mutation::ConvertNoteToText {
+            note_id: m.notes()[0].id.clone(),
         }
     }));
     c.push(paints("SetFieldValue", "text", |m| {

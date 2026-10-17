@@ -79,7 +79,7 @@ impl CanvasExportSession {
         model: &CanvasModel,
         wire: &ExportPdfWireOptions,
     ) -> Result<(Self, usize), String> {
-        let options = wire_to_options(wire)?;
+        let mut options = wire_to_options(wire)?;
 
         // One-shot build: glyph side-channel ON, splice caches OFF
         // (stable command indices), proof state ignored (export uses
@@ -87,6 +87,9 @@ impl CanvasExportSession {
         let built = model
             .build_for_export()
             .map_err(|e| format!("export build failed: {e}"))?;
+        if wire.bookmarks {
+            options.bookmarks = pdf_bookmarks(model.scene(), &built);
+        }
 
         // Face bytes for every font the glyph tables reference, keyed
         // by `face_id` — the id that resolves to BYTES. `font_id` is
@@ -286,6 +289,77 @@ impl CanvasExportSession {
     }
 }
 
+/// ADR 171 — the document's bookmarks as PDF outline items, in document
+/// order: each nested under its parent (`bookmark_parents`) and going to
+/// the page its destination names (a page destination's page; a text or
+/// paragraph destination's paragraph as laid out, else its story's first
+/// page). A bookmark whose destination resolves to no page is left out.
+pub(crate) fn pdf_bookmarks(
+    scene: &paged_scene::Document,
+    built: &paged_renderer::BuiltDocument,
+) -> Vec<paged_export_pdf::PdfBookmark> {
+    let dm = &scene.designmap;
+    let laid_out = built.paragraph_pages();
+    let page_of_id: HashMap<&str, usize> = built
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.id.as_str(), i))
+        .collect();
+    let mut anchors: HashMap<&str, (&str, usize)> = HashMap::new();
+    for s in &scene.stories {
+        for d in &s.story.destinations {
+            anchors.insert(
+                d.self_id.as_str(),
+                (s.self_id.as_str(), d.paragraph as usize),
+            );
+        }
+    }
+    let story_first_page = |story: &str| -> Option<usize> {
+        laid_out.get(story).and_then(|m| m.values().min().copied())
+    };
+    let page_of = |dest: &str| -> Option<usize> {
+        if let Some((story, para)) = anchors.get(dest) {
+            return laid_out
+                .get(*story)
+                .and_then(|m| m.get(para).copied())
+                .or_else(|| story_first_page(story));
+        }
+        match &dm
+            .hyperlink_destinations
+            .iter()
+            .find(|d| d.self_id == dest)?
+            .kind
+        {
+            paged_model::HyperlinkDestinationKind::Page(page) => {
+                page_of_id.get(page.as_str()).copied()
+            }
+            paged_model::HyperlinkDestinationKind::TextAnchor(story) => story_first_page(story),
+            paged_model::HyperlinkDestinationKind::Url(_) => None,
+        }
+    };
+    let depth_of = |id: &str| -> u32 {
+        let mut depth = 0;
+        let mut at = dm.bookmark_parents.get(id);
+        while let Some(parent) = at {
+            depth += 1;
+            at = dm.bookmark_parents.get(parent);
+        }
+        depth
+    };
+    dm.bookmarks
+        .iter()
+        .filter_map(|b| {
+            let page_index = b.destination.as_deref().and_then(page_of)?;
+            Some(paged_export_pdf::PdfBookmark {
+                title: b.name.clone().unwrap_or_default(),
+                depth: depth_of(&b.self_id),
+                page_index,
+            })
+        })
+        .collect()
+}
+
 fn wire_to_options(wire: &ExportPdfWireOptions) -> Result<ExportOptions, String> {
     let standard = match wire.standard.as_deref() {
         None | Some("pdf17") => PdfStandard::Pdf17,
@@ -309,6 +383,7 @@ fn wire_to_options(wire: &ExportPdfWireOptions) -> Result<ExportOptions, String>
         (None, None) => None,
     };
     Ok(ExportOptions {
+        bookmarks: Vec::new(),
         standard,
         color_policy,
         output_condition: wire.output_condition.clone(),

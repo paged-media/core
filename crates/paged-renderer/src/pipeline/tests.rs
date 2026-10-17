@@ -4463,7 +4463,7 @@ fn no_footnote_frame_is_byte_identical() {
 }
 
 #[test]
-fn build_index_paragraphs_emits_topic_tab_pages() {
+fn index_paragraphs_write_indesigns_default_index() {
     // Construct a Document by parsing a small IDML so we exercise
     // the full resolve_index → build path. Reusing the parser
     // here is far cheaper than a hand-rolled Document.
@@ -4517,10 +4517,19 @@ fn build_index_paragraphs_emits_topic_tab_pages() {
     let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
 
     let page_labels = vec!["1".to_string()];
-    let paragraphs = build_index_paragraphs(&doc, &page_labels);
-    assert_eq!(paragraphs.len(), 1);
-    assert_eq!(paragraphs[0].runs.len(), 1);
-    assert_eq!(paragraphs[0].runs[0].text, "Apple\t1");
+    let entries = doc.resolve_index_tree_on(&Default::default());
+    let paragraphs = index_paragraphs(None, entries, &page_labels);
+    let texts: Vec<String> = paragraphs
+        .iter()
+        .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect())
+        .collect();
+    // InDesign's default index (ADR 168): the title, the section's
+    // letter, the topic and its page behind two spaces.
+    assert_eq!(texts, ["Index", "A", "Apple  1"]);
+    assert_eq!(
+        paragraphs[2].paragraph_style.as_deref(),
+        Some("ParagraphStyle/$ID/Index Level 1")
+    );
 }
 
 /// path and decode at native size via `image::load_from_memory`.

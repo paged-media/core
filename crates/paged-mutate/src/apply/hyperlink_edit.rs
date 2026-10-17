@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! v73 — deleting and editing a hyperlink of any origin (ADR 164).
+//! v0.71.13 — deleting and editing a hyperlink of any origin (ADR 164).
 //!
 //! `InsertHyperlink`'s own inverse knows the span and URL it made; a link
 //! read from an InDesign document carries neither on an op. These doors

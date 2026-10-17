@@ -2,7 +2,7 @@
 
 - **Status:** Accepted 2026-10-16.
 - **Scope:**
-  - `paged-wire`: `Mutation::InsertFootnote`, `Mutation::DeleteFootnote` (protocol 73).
+  - `paged-wire`: `Mutation::InsertFootnote`, `Mutation::DeleteFootnote` (`v0.71.13`, on protocol 71).
   - `paged-mutate`: `Operation::InsertFootnote`, `Operation::RemoveFootnote` (`apply::footnote`),
     and footnote ids in the id scan.
   - `paged-canvas`:

@@ -13,7 +13,9 @@
  */
 
 // Ask InDesign what Generate Index writes (index-probe.sh drives it).
-// Builds a four-page document whose threaded story runs over pages 1-3
+// With PROBE_IN, opens that IDML (core's `index` sample) and generates
+// its index; otherwise builds a four-page document whose threaded story
+// runs over pages 1-3
 // and carries page references to topics at two levels, a topic with
 // references on two pages, one with two on the same page, three on
 // consecutive pages, and a See cross-reference; then generates the index
@@ -22,9 +24,10 @@
 // paragraph (style, character ranges with style and text, specials as
 // code points), and exports InDesign's IDML and PDF.
 //
-// Inputs: PROBE_OUT (JSON), PROBE_IDML, PROBE_PDF.
+// Inputs: PROBE_IN (optional IDML to open), PROBE_OUT (JSON), PROBE_IDML,
+// PROBE_PDF.
 (function () {
-    var OUT = $.global.PROBE_OUT;
+    var OUT = $.global.PROBE_OUT, IN = $.global.PROBE_IN;
     app.scriptPreferences.userInteractionLevel = UserInteractionLevels.NEVER_INTERACT;
     app.scriptPreferences.measurementUnit = MeasurementUnits.POINTS;
     function q(s) { return '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'; }
@@ -37,9 +40,13 @@
         return o;
     }
     var log = [];
-    var doc = app.documents.add(true);
+    var doc = IN ? app.open(File(IN), true) : app.documents.add(true);
     try { build(); } finally { doc.close(SaveOptions.NO); }
     function build() {
+        if (!IN) populate();
+        generateAndDump();
+    }
+    function populate() {
         doc.documentPreferences.facingPages = false;
         doc.documentPreferences.pageWidth = 400;
         doc.documentPreferences.pageHeight = 300;
@@ -78,6 +85,12 @@
         try {
             fruit.crossReferences.add(apples, CrossReferenceType.SEE);
         } catch (e) { log.push("crossReference: " + e); }
+    }
+    function generateAndDump() {
+        var index = doc.indexes[0];
+        // An opened document is composed lazily: without this, Generate
+        // Index finds no page for any reference and lists none.
+        doc.recompose();
 
         var opts = "";
         try {

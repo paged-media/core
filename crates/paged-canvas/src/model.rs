@@ -2904,6 +2904,13 @@ impl CanvasModel {
             // Reads the layout, so it lowers here, where a build a batch
             // still owes can be settled first.
             Mutation::UpdateTableOfContents { story_id } => Some(self.lower_update_toc(story_id)?),
+            Mutation::GenerateIndex { story_id } => Some(self.lower_generate_index(story_id)?),
+            Mutation::UpdateCrossReferences { source_id } => {
+                Some(self.lower_update_cross_references(source_id.as_deref())?)
+            }
+            Mutation::ConvertNoteToText { note_id } => {
+                Some(self.lower_convert_note_to_text(note_id)?)
+            }
             _ => self.try_translate_frame_mutation_to_operation(mutation, &mut 0),
         };
         if let Some(op) = lowered {
@@ -4610,6 +4617,75 @@ impl CanvasModel {
             } => Some(Operation::RemoveFootnote {
                 story_id: story_id.clone(),
                 footnote_id: footnote_id.clone(),
+            }),
+            Mutation::InsertNote {
+                story_id,
+                offset,
+                paragraph,
+                text,
+                user,
+                date,
+            } => Some(Operation::InsertNote {
+                story_id: story_id.clone(),
+                offset: *offset,
+                paragraph: *paragraph,
+                note_id: self.mint_page_item_id_with_offset(mint_offset),
+                text: text.clone(),
+                user: user.clone(),
+                date: date.clone(),
+                restore: None,
+            }),
+            Mutation::EditNote {
+                note_id,
+                text,
+                date,
+            } => Some(Operation::EditNote {
+                note_id: note_id.clone(),
+                text: text.clone(),
+                // No date passed: the note keeps the one it has.
+                modification_date: date.clone().or_else(|| {
+                    let (si, pi, k) = self.find_note(note_id)?;
+                    self.scene.stories[si].story.paragraphs[pi].notes[k]
+                        .modification_date
+                        .clone()
+                }),
+            }),
+            Mutation::DeleteNote { note_id } => Some(Operation::DeleteNote {
+                note_id: note_id.clone(),
+            }),
+            Mutation::CreateBookmark {
+                name,
+                page,
+                destination,
+                parent,
+                index,
+            } => {
+                let base = self.mint_page_item_id_with_offset(mint_offset);
+                Some(Operation::CreateBookmark {
+                    bookmark_id: base.clone(),
+                    name: name.clone(),
+                    parent: parent.clone(),
+                    index: *index,
+                    destination: destination.clone(),
+                    page: page.as_ref().map(|p| p.0.clone()),
+                    dest_id: format!("HyperlinkPageDestination/{base}"),
+                })
+            }
+            Mutation::DeleteBookmark { bookmark_id } => Some(Operation::DeleteBookmark {
+                bookmark_id: bookmark_id.clone(),
+            }),
+            Mutation::RenameBookmark { bookmark_id, name } => Some(Operation::RenameBookmark {
+                bookmark_id: bookmark_id.clone(),
+                name: name.clone(),
+            }),
+            Mutation::MoveBookmark {
+                bookmark_id,
+                parent,
+                index,
+            } => Some(Operation::MoveBookmark {
+                bookmark_id: bookmark_id.clone(),
+                parent: parent.clone(),
+                index: *index,
             }),
             Mutation::DeleteHyperlink { hyperlink_id } => Some(Operation::DeleteHyperlink {
                 hyperlink_id: hyperlink_id.clone(),
@@ -9088,6 +9164,12 @@ impl CanvasModel {
                 self_id: b.self_id.clone(),
                 name: b.name.clone().unwrap_or_else(|| b.self_id.clone()),
                 destination: b.destination.clone().unwrap_or_default(),
+                parent: self
+                    .scene
+                    .designmap
+                    .bookmark_parents
+                    .get(&b.self_id)
+                    .cloned(),
             })
             .collect()
     }
@@ -9123,11 +9205,81 @@ impl CanvasModel {
             .collect()
     }
 
-    /// v73 (ADR 163) — every footnote, in story order. Backs
+    /// v0.71.13 (ADR 163) — every footnote, in story order. Backs
     /// `documentCollection:footnotes`. A note's reference offset is the
     /// story char (contiguous) of its marker: the k-th marker of its
     /// paragraph when the paragraph holds one per note, its anchor
     /// otherwise; its label and page come from the last layout.
+    pub fn notes(&self) -> Vec<crate::channel::NoteSummary> {
+        let mut out = Vec::new();
+        for story in &self.scene.stories {
+            let mut start = 0u32;
+            for para in &story.story.paragraphs {
+                let markers: Vec<u32> = para
+                    .runs
+                    .iter()
+                    .flat_map(|r| r.text.chars())
+                    .enumerate()
+                    .filter(|(_, c)| *c == paged_model::NOTE_MARKER)
+                    .map(|(i, _)| i as u32)
+                    .collect();
+                let one_each = markers.len() == para.notes.len();
+                for (k, note) in para.notes.iter().enumerate() {
+                    let local = if one_each { markers[k] } else { note.anchor };
+                    out.push(crate::channel::NoteSummary {
+                        id: note.id.clone(),
+                        story_id: story.self_id.clone(),
+                        offset: start + local,
+                        text: note.text.clone(),
+                        user_name: note.user_name.clone(),
+                        creation_date: note.creation_date.clone(),
+                        modification_date: note.modification_date.clone(),
+                        collapsed: note.collapsed,
+                    });
+                }
+                start += para
+                    .runs
+                    .iter()
+                    .map(|r| r.text.chars().count() as u32)
+                    .sum::<u32>();
+            }
+        }
+        out
+    }
+
+    /// The story, paragraph and index in it of note `note_id`.
+    fn find_note(&self, note_id: &str) -> Option<(usize, usize, usize)> {
+        self.scene.stories.iter().enumerate().find_map(|(si, s)| {
+            s.story.paragraphs.iter().enumerate().find_map(|(pi, p)| {
+                p.notes
+                    .iter()
+                    .position(|n| n.id == note_id)
+                    .map(|k| (si, pi, k))
+            })
+        })
+    }
+
+    /// `ConvertNoteToText` (ADR 172): the note's place becomes a space and
+    /// its text, its paragraphs the story's, as InDesign 20.0.1 converts
+    /// one (`notes-probe`). One `ReplaceStoryParagraphs`: one undo.
+    fn lower_convert_note_to_text(
+        &self,
+        note_id: &str,
+    ) -> Result<paged_mutate::Operation, crate::channel::WorkerError> {
+        let (si, pi, k) =
+            self.find_note(note_id)
+                .ok_or_else(|| crate::channel::WorkerError::NotImplemented {
+                    what: format!("convertNoteToText: no note {note_id}"),
+                })?;
+        let story = &self.scene.stories[si];
+        let mut paragraphs = story.story.paragraphs.clone();
+        crate::mutate::convert_note_to_text(&mut paragraphs, pi, k);
+        Ok(paged_mutate::Operation::ReplaceStoryParagraphs {
+            story_id: story.self_id.clone(),
+            paragraphs_json: serde_json::to_string(&paragraphs).expect("paragraphs serialize"),
+        })
+    }
+
     pub fn footnotes(&self) -> Vec<crate::channel::FootnoteSummary> {
         use crate::channel::FootnoteSummary;
         let mark = paged_model::FOOTNOTE_REFERENCE_MARKER;
@@ -9707,6 +9859,7 @@ impl CanvasModel {
             CrossReferences => serde_json::to_value(self.cross_references()).unwrap_or_default(),
             IndexTopics => serde_json::to_value(self.index_topics()).unwrap_or_default(),
             Footnotes => serde_json::to_value(self.footnotes()).unwrap_or_default(),
+            Notes => serde_json::to_value(self.notes()).unwrap_or_default(),
             Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
             Sections => serde_json::to_value(self.sections()).unwrap_or_default(),
             Stories => serde_json::to_value(self.stories()).unwrap_or_default(),
@@ -11124,7 +11277,237 @@ impl CanvasModel {
         self.rebuild_after_mutation()
     }
 
-    /// v73 — `UpdateTableOfContents` (ADR 165): TOC story `story_id`'s
+    /// Settle a build a batch still owes, so an op that reads the layout
+    /// (Update Table of Contents, Generate Index) reads the current one.
+    fn settle_owed_build(&mut self, op: &str) -> Result<(), crate::channel::WorkerError> {
+        if !self.rebuild_owed {
+            return Ok(());
+        }
+        let outer = std::mem::replace(&mut self.rebuild_deferred, false);
+        self.rebuild_owed = false;
+        let rebuilt = self.rebuild_after_mutation();
+        self.rebuild_deferred = outer;
+        rebuilt.map_err(|e| crate::channel::WorkerError::NotImplemented {
+            what: format!("{op}: the layout did not build ({e:?})"),
+        })
+    }
+
+    /// `UpdateCrossReferences` (ADR 169): each source's runs rebuilt from
+    /// its format's building blocks over its destination paragraph, as
+    /// InDesign 20.0.1 rewrites them (`xref-update-probe`). One
+    /// `ReplaceStoryParagraphs` per story the update changes, in one batch.
+    fn lower_update_cross_references(
+        &mut self,
+        only: Option<&str>,
+    ) -> Result<paged_mutate::Operation, crate::channel::WorkerError> {
+        use paged_mutate::Operation;
+        use std::collections::HashMap;
+        self.settle_owed_build("updateCrossReferences")?;
+        let scene = &self.scene;
+        let dm = &scene.designmap;
+        let laid_out = self.built.paragraph_pages();
+        let labels: Vec<String> = self.pages().into_iter().map(|p| p.name).collect();
+        // Every destination standing in a story: id → (story, paragraph,
+        // name, paragraph destination).
+        let mut destinations: HashMap<&str, (&str, usize, Option<&str>, bool)> = HashMap::new();
+        for s in &scene.stories {
+            for d in &s.story.destinations {
+                destinations.insert(
+                    d.self_id.as_str(),
+                    (
+                        s.self_id.as_str(),
+                        d.paragraph as usize,
+                        d.name.as_deref(),
+                        d.paragraph_destination,
+                    ),
+                );
+            }
+        }
+        let page_variable = dm
+            .text_variables
+            .iter()
+            .find(|v| v.variable_type.as_deref() == Some("XrefPageNumberType"))
+            .map(|v| v.self_id.clone());
+        let mut list_labels: HashMap<&str, Vec<Option<String>>> = HashMap::new();
+        let mut ops: Vec<Operation> = Vec::new();
+        let mut found = only.is_none();
+        for parsed in &scene.stories {
+            let mut paragraphs = parsed.story.paragraphs.clone();
+            let mut changed = false;
+            for source in &parsed.story.cross_reference_sources {
+                if only.is_some_and(|id| id != source.self_id) {
+                    continue;
+                }
+                found = true;
+                let Some(format) = source
+                    .format
+                    .as_deref()
+                    .and_then(|f| dm.cross_reference_formats.iter().find(|x| x.self_id == f))
+                else {
+                    continue;
+                };
+                let Some(&(story, para, name, paragraph_destination)) = dm
+                    .hyperlinks
+                    .iter()
+                    .find(|h| h.source.as_deref() == Some(source.self_id.as_str()))
+                    .and_then(|h| h.destination.as_deref())
+                    .and_then(|d| destinations.get(d))
+                else {
+                    continue;
+                };
+                let Some(target) = scene
+                    .stories
+                    .iter()
+                    .find(|s| s.self_id == story)
+                    .and_then(|s| s.story.paragraphs.get(para))
+                else {
+                    continue;
+                };
+                let label = list_labels
+                    .entry(story)
+                    .or_insert_with(|| {
+                        let s = scene.stories.iter().find(|s| s.self_id == story);
+                        s.map(|s| paged_renderer::pipeline::story_list_labels(scene, &s.story))
+                            .unwrap_or_default()
+                    })
+                    .get(para)
+                    .cloned()
+                    .flatten();
+                let page = laid_out
+                    .get(story)
+                    .and_then(|m| m.get(&para).copied())
+                    .and_then(|p| labels.get(p).cloned())
+                    .unwrap_or_default();
+                let blocks = cross_reference_text(
+                    format,
+                    target,
+                    label.as_deref(),
+                    name.filter(|_| !paragraph_destination),
+                    dm.document_name.as_deref(),
+                );
+                changed |= replace_source_runs(
+                    &mut paragraphs,
+                    &source.self_id,
+                    &blocks,
+                    &page,
+                    page_variable.as_deref(),
+                );
+            }
+            if changed {
+                ops.push(Operation::ReplaceStoryParagraphs {
+                    story_id: parsed.self_id.clone(),
+                    paragraphs_json: serde_json::to_string(&paragraphs)
+                        .expect("paragraphs serialize"),
+                });
+            }
+        }
+        if !found {
+            return Err(crate::channel::WorkerError::NotImplemented {
+                what: format!(
+                    "updateCrossReferences: no cross-reference source {}",
+                    only.unwrap_or_default()
+                ),
+            });
+        }
+        Ok(match ops.len() {
+            1 => ops.pop().expect("one op"),
+            _ => Operation::Batch { ops },
+        })
+    }
+
+    /// v72 — `GenerateIndex` (ADR 168): story `story_id`'s paragraphs
+    /// become the document's index over the CURRENT layout, and the index
+    /// styles it names that the document lacks are created first, with
+    /// the attributes InDesign 20.0.1 gives them. One batch: one undo.
+    fn lower_generate_index(
+        &mut self,
+        story_id: &str,
+    ) -> Result<paged_mutate::Operation, crate::channel::WorkerError> {
+        use paged_mutate::Operation;
+        self.settle_owed_build("generateIndex")?;
+        if !self.scene.stories.iter().any(|s| s.self_id == story_id) {
+            return Err(crate::channel::WorkerError::NotImplemented {
+                what: format!("generateIndex: no story {story_id}"),
+            });
+        }
+        let laid_out = self.built.paragraph_pages();
+        let labels: Vec<String> = self.pages().into_iter().map(|p| p.name).collect();
+        let entries = self.scene.resolve_index_tree_on(&laid_out);
+        let options = self.scene.designmap.index_options.clone();
+        let paragraphs =
+            paged_renderer::pipeline::index_paragraphs(options.as_ref(), entries, &labels);
+
+        let mut ops: Vec<Operation> = Vec::new();
+        let mut wanted_paragraph: Vec<&str> = Vec::new();
+        let mut wanted_character: Vec<&str> = Vec::new();
+        for p in &paragraphs {
+            if let Some(s) = p.paragraph_style.as_deref() {
+                if !wanted_paragraph.contains(&s) {
+                    wanted_paragraph.push(s);
+                }
+            }
+            for r in &p.runs {
+                if let Some(s) = r.character_style.as_deref() {
+                    if !wanted_character.contains(&s) {
+                        wanted_character.push(s);
+                    }
+                }
+            }
+        }
+        for id in wanted_paragraph {
+            if self.scene.styles.paragraph_styles.contains_key(id) {
+                continue;
+            }
+            // InDesign bases them on [Basic Paragraph].
+            let basic = "ParagraphStyle/$ID/NormalParagraphStyle";
+            let based_on = if self.scene.styles.paragraph_styles.contains_key(basic) {
+                basic
+            } else {
+                "ParagraphStyle/$ID/[No paragraph style]"
+            };
+            let def = indesign_index_paragraph_style(id, based_on);
+            ops.push(Operation::CreateParagraphStyle {
+                self_id: None,
+                name: None,
+                based_on: None,
+                restore_json: Some(serde_json::to_string(&def).expect("a style serializes")),
+            });
+        }
+        for id in wanted_character {
+            if self.scene.styles.character_styles.contains_key(id) {
+                continue;
+            }
+            let def = paged_model::CharacterStyleDef {
+                self_id: id.to_string(),
+                name: id.strip_prefix("CharacterStyle/").map(str::to_string),
+                based_on: Some("CharacterStyle/$ID/[No character style]".to_string()),
+                // InDesign's own Index Cross-reference: Minion Pro Italic 10.
+                font: (id == "CharacterStyle/$ID/Index Cross-reference")
+                    .then(|| "Minion Pro".to_string()),
+                font_style: (id == "CharacterStyle/$ID/Index Cross-reference")
+                    .then(|| "Italic".to_string()),
+                point_size: (id == "CharacterStyle/$ID/Index Cross-reference").then_some(10.0),
+                ..Default::default()
+            };
+            ops.push(Operation::CreateCharacterStyle {
+                self_id: None,
+                name: None,
+                based_on: None,
+                restore_json: Some(serde_json::to_string(&def).expect("a style serializes")),
+            });
+        }
+        ops.push(Operation::ReplaceStoryParagraphs {
+            story_id: story_id.to_string(),
+            paragraphs_json: serde_json::to_string(&paragraphs).expect("paragraphs serialize"),
+        });
+        Ok(if ops.len() == 1 {
+            ops.pop().expect("one op")
+        } else {
+            Operation::Batch { ops }
+        })
+    }
+
+    /// v0.71.13 — `UpdateTableOfContents` (ADR 165): TOC story `story_id`'s
     /// new paragraphs, from its TOC style over the CURRENT layout. A build
     /// a batch still owes is settled first, since the entries' pages come
     /// from it.
@@ -11133,15 +11516,7 @@ impl CanvasModel {
         story_id: &str,
     ) -> Result<paged_mutate::Operation, crate::channel::WorkerError> {
         use crate::channel::WorkerError;
-        if self.rebuild_owed {
-            let outer = std::mem::replace(&mut self.rebuild_deferred, false);
-            self.rebuild_owed = false;
-            let rebuilt = self.rebuild_after_mutation();
-            self.rebuild_deferred = outer;
-            rebuilt.map_err(|e| WorkerError::NotImplemented {
-                what: format!("updateTableOfContents: the layout did not build ({e:?})"),
-            })?;
-        }
+        self.settle_owed_build("updateTableOfContents")?;
         let refuse = |what: String| WorkerError::NotImplemented { what };
         let parsed = self
             .scene
@@ -13164,6 +13539,181 @@ fn frame_self_id(spread: &paged_model::Spread, fr: paged_model::FrameRef) -> Opt
         FrameRef::Polygon(i) => spread.polygons.get(i)?.self_id.clone(),
         FrameRef::Group(i) => spread.groups.get(i)?.self_id.clone(),
     }
+}
+
+/// What a cross-reference says (ADR 169), block by block: `(text,
+/// character style)` for each building block, the page number as `None`
+/// text (it is the live `XRefPageNumber`). As InDesign 20.0.1 writes them
+/// (`xref-update-probe`): a full paragraph is its list label (its tab a
+/// space) and its text; a paragraph number is the label without its
+/// trailing separator (`1.⇥` → `1`); a text anchor's name prints for a
+/// text destination only (a paragraph destination's is empty).
+fn cross_reference_text(
+    format: &paged_model::CrossReferenceFormat,
+    target: &paged_model::Paragraph,
+    label: Option<&str>,
+    anchor_name: Option<&str>,
+    file_name: Option<&str>,
+) -> Vec<(Option<String>, Option<String>)> {
+    let text: String = target
+        .runs
+        .iter()
+        .flat_map(|r| r.text.chars())
+        .filter(|c| !paged_model::is_generated_marker(*c))
+        .collect();
+    let text = text.trim_end_matches(['\n', '\r']).to_string();
+    let style = |s: &Option<String>| {
+        s.clone()
+            .filter(|s| s != "n" && !s.ends_with("[No character style]"))
+    };
+    let custom = |s: &Option<String>| {
+        s.as_deref()
+            .map(|t| t.strip_prefix("$ID/").unwrap_or(t).to_string())
+            .unwrap_or_default()
+    };
+    format
+        .blocks
+        .iter()
+        .map(|b| {
+            let words = match b.block_type.as_str() {
+                "CustomStringBuildingBlock" => Some(custom(&b.custom_text)),
+                "FullParagraphBuildingBlock" => Some(format!(
+                    "{}{text}",
+                    label.unwrap_or_default().replace('\t', " ")
+                )),
+                "ParagraphTextBuildingBlock" => Some(text.clone()),
+                "ParagraphNumberBuildingBlock" => Some(
+                    label
+                        .unwrap_or_default()
+                        .trim_end()
+                        .trim_end_matches('.')
+                        .to_string(),
+                ),
+                "PartialParagraphBuildingBlock" => {
+                    let delimiter = custom(&b.applied_delimiter);
+                    Some(match delimiter.chars().next() {
+                        Some(d) => match text.find(d) {
+                            Some(at) if b.include_delimiter == Some(true) => {
+                                text[..at + d.len_utf8()].to_string()
+                            }
+                            Some(at) => text[..at].to_string(),
+                            None => text.clone(),
+                        },
+                        None => text.clone(),
+                    })
+                }
+                "BookmarkNameBuildingBlock" => Some(anchor_name.unwrap_or_default().to_string()),
+                "FileNameBuildingBlock" => Some(file_name.unwrap_or_default().to_string()),
+                "PageNumberBuildingBlock" => None,
+                // Chapter numbers across a book are not modelled yet.
+                _ => Some(String::new()),
+            };
+            (
+                words,
+                style(&b.applied_character_style)
+                    .or_else(|| style(&format.applied_character_style)),
+            )
+        })
+        .collect()
+}
+
+/// Replace the runs `source` tags in `paragraphs` with `blocks` (ADR
+/// 169): each block a run with the first old run's attributes, its own
+/// character style where it names one, still tagged with the source; the
+/// page number a run of the `XRefPageNumber` variable printing `page`.
+/// Neighbouring text blocks of one style are one run. False when no run
+/// carries the source.
+fn replace_source_runs(
+    paragraphs: &mut [paged_model::Paragraph],
+    source: &str,
+    blocks: &[(Option<String>, Option<String>)],
+    page: &str,
+    page_variable: Option<&str>,
+) -> bool {
+    for para in paragraphs.iter_mut() {
+        let Some(first) = para
+            .runs
+            .iter()
+            .position(|r| r.hyperlink_source.as_deref() == Some(source))
+        else {
+            continue;
+        };
+        let end = para.runs[first..]
+            .iter()
+            .position(|r| r.hyperlink_source.as_deref() != Some(source))
+            .map_or(para.runs.len(), |n| first + n);
+        let mut base = para.runs[first].clone();
+        base.text_variable = None;
+        let mut runs: Vec<paged_model::CharacterRun> = Vec::new();
+        for (words, style) in blocks {
+            let mut run = base.clone();
+            if let Some(style) = style {
+                run.character_style = Some(style.clone());
+            }
+            match words {
+                Some(words) if words.is_empty() => continue,
+                Some(words) => {
+                    run.text = words.clone();
+                    match runs.last_mut() {
+                        Some(last)
+                            if last.text_variable.is_none()
+                                && last.character_style == run.character_style =>
+                        {
+                            last.text.push_str(&run.text)
+                        }
+                        _ => runs.push(run),
+                    }
+                }
+                None => {
+                    run.text = page.to_string();
+                    run.text_variable = page_variable.map(str::to_string);
+                    runs.push(run);
+                }
+            }
+        }
+        para.runs.splice(first..end, runs);
+        return true;
+    }
+    false
+}
+
+/// An index paragraph style InDesign 20.0.1 creates when Generate Index
+/// needs it and the document lacks it, with the attributes it gives it
+/// (`index-probe`, ADR 168): the title 30 pt centred with 18 pt after, a
+/// section head with 7.2 pt before and after, a level 10 pt hanging from
+/// a 28 pt indent (level 1 by 28 pt, the others by 21 pt), each based on
+/// `based_on` ([Basic Paragraph] where the document has one). Any other
+/// id is created plain.
+fn indesign_index_paragraph_style(id: &str, based_on: &str) -> paged_model::ParagraphStyleDef {
+    let mut def = paged_model::ParagraphStyleDef {
+        self_id: id.to_string(),
+        name: id.strip_prefix("ParagraphStyle/").map(str::to_string),
+        based_on: Some(based_on.to_string()),
+        ..Default::default()
+    };
+    match id {
+        "ParagraphStyle/$ID/Index Title" => {
+            def.point_size = Some(30.0);
+            def.space_after = Some(18.0);
+            def.justification = Some(paged_model::Justification::CenterAlign);
+        }
+        "ParagraphStyle/$ID/Index Section Head" => {
+            def.space_before = Some(7.2);
+            def.space_after = Some(7.2);
+        }
+        "ParagraphStyle/$ID/Index Level 1" => {
+            def.point_size = Some(10.0);
+            def.left_indent = Some(28.0);
+            def.first_line_indent = Some(-28.0);
+        }
+        _ if id.starts_with("ParagraphStyle/$ID/Index Level ") => {
+            def.point_size = Some(10.0);
+            def.left_indent = Some(28.0);
+            def.first_line_indent = Some(-21.0);
+        }
+        _ => {}
+    }
+    def
 }
 
 #[cfg(test)]

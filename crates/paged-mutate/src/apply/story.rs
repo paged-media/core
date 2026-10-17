@@ -84,7 +84,7 @@ pub(super) fn apply_restore_story(
     })
 }
 
-/// v73 — set a story's paragraphs to `paragraphs_json` (a JSON
+/// v0.71.13 — set a story's paragraphs to `paragraphs_json` (a JSON
 /// `Vec<Paragraph>`), as Update Table of Contents writes a TOC story
 /// (ADR 165). The inverse carries the paragraphs it replaced.
 pub(super) fn apply_replace_story_paragraphs(
