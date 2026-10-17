@@ -19,6 +19,7 @@ pub mod anchored;
 pub mod annual_base;
 pub mod baseline_grid;
 pub mod blank_paragraphs;
+pub mod chain_widths;
 pub mod column_rules;
 pub mod composer;
 pub mod conditions;
@@ -166,6 +167,7 @@ pub const SAMPLES: &[&str] = &[
     "mixed-leading",
     "keeps",
     "start-paragraph",
+    "chain-widths",
     "span-columns",
     "split-boundaries",
     "forced-line-break",
@@ -272,6 +274,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "mixed-leading" => mixed_leading::build(),
         "keeps" => keeps::build(),
         "start-paragraph" => start_paragraph::build(),
+        "chain-widths" => chain_widths::build(),
         "span-columns" => span_columns::build(),
         "split-boundaries" => split_boundaries::build(),
         "forced-line-break" => forced_line_break::build(),
@@ -358,7 +361,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            100,
+            101,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

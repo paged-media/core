@@ -107,6 +107,7 @@ is not written yet.
 | [176](176-nested-tables.md) | A table nested in a cell is drawn as any table is, as InDesign draws it | Accepted 2026-10-17 |
 | [177](177-table-rows-fit-the-text-area.md) | A frame holds the table rows its text area holds, strokes included | Accepted 2026-10-17 |
 | [178](178-footnotes-grow-and-continue.md) | A growing story grows a page for its footnotes, and a note continues from where it stopped | Accepted 2026-10-17 |
+| [179](179-chain-frames-of-different-widths.md) | Each frame of a chain sets its lines at its own measure | Accepted 2026-10-17 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
