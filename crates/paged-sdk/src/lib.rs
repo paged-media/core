@@ -219,13 +219,15 @@ mod wasm {
                 .add_font(&family, style.as_deref(), bytes.into_vec());
         }
 
-        /// Parse + build a complete IDML package. `font` is optional. Caches
-        /// the built document and resets the current page to 0. Returns
-        /// structured diagnostics; does not throw on recoverable problems.
+        /// Parse + build a complete IDML package or `.paged` container (its
+        /// native model part when it carries one, ADR 181). `font` is
+        /// optional. Caches the built document and resets the current page
+        /// to 0. Returns structured diagnostics; does not throw on
+        /// recoverable problems.
         pub fn load(&mut self, idml: &[u8], font: Option<Box<[u8]>>) -> Diagnostics {
-            let document = match idml_import::import_idml_doc(idml) {
-                Ok(d) => d,
-                Err(e) => return Diagnostics::error("open", &format!("open IDML: {e}")),
+            let document = match paged_renderer::container::open_document(idml) {
+                Ok(o) => o.document,
+                Err(e) => return Diagnostics::error("open", &format!("open document: {e}")),
             };
             // `crate::viewer_build` is the single load path — shared
             // with the native digest-equivalence test ("same code,
