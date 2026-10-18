@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **This repository has moved to [paged-media/paged](https://github.com/paged-media/paged/tree/main/engine/core).**
+> Its code now live in `engine/core/` there, with the full history. This repository is frozen
+> and will be archived: open issues and pull requests in paged-media/paged.
+
 # paged
 
 **Pixel-faithful Adobe IDML rendering, in Rust.** `paged` parses IDML
