@@ -95,8 +95,6 @@ pub const ENGINE: &[&str] = &[
 pub const REFERENCE: &[&str] = &["lookup_api"];
 /// Tools that reach the user's open editor tabs (paged.server only).
 pub const LIVE: &[&str] = &["list_live_sessions"];
-/// Tools that read a workspace's data sources (paged.server only).
-pub const DATA: &[&str] = &["query_data"];
 
 /// Every tool, in a stable order.
 pub fn catalog() -> Vec<Tool> {
@@ -243,22 +241,6 @@ pub fn catalog() -> Vec<Tool> {
             title: "Look up the API",
             description: "Searches the engine's capability catalog: paged.* functions, address grammar, settable properties and their types, constraints.",
             input_schema: schema(json!({ "query": { "type": "string" } }), &["query"]),
-            read_only: true,
-            view: false,
-        },
-        Tool {
-            name: "query_data",
-            title: "Query a data source",
-            description: "Runs one of a workspace's named, read-only queries against its data source (a database), with text parameters. Owners define the queries; ad-hoc SQL is not accepted.",
-            input_schema: schema(
-                json!({
-                    "workspace": { "type": "string" },
-                    "source": { "type": "string", "description": "The data source's name." },
-                    "query": { "type": "string", "description": "The named query." },
-                    "params": { "type": "array", "items": { "type": "string" } }
-                }),
-                &["workspace", "source", "query"],
-            ),
             read_only: true,
             view: false,
         },
