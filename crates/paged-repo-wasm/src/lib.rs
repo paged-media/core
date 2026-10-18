@@ -329,6 +329,64 @@ impl Repository {
             .map_err(js)
     }
 
+    /// Opens a set of parts (a dataset: CSV, Parquet, JSON, …) as `ref_name`'s
+    /// first version. `manifest` is JSON `[{path, offset, len}]` into `bytes`.
+    #[wasm_bindgen(js_name = importParts)]
+    pub fn import_parts(
+        &mut self,
+        manifest: &str,
+        bytes: &[u8],
+        ref_name: &str,
+        actor: &str,
+        message: &str,
+        ts: f64,
+    ) -> Result<String, JsError> {
+        #[derive(serde::Deserialize)]
+        struct Part {
+            path: String,
+            offset: usize,
+            len: usize,
+        }
+        let parts: Vec<Part> =
+            serde_json::from_str(manifest).map_err(|e| JsError::new(&e.to_string()))?;
+        let mut objects = std::collections::BTreeMap::new();
+        let mut entries = Vec::new();
+        for p in parts {
+            let slice = bytes
+                .get(p.offset..p.offset + p.len)
+                .ok_or_else(|| JsError::new(&format!("{} lies outside the bytes", p.path)))?;
+            entries.push(paged_repo::part_entry(p.path, slice.to_vec(), &mut objects));
+        }
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        let tree = paged_repo::Tree { v: 1, entries };
+        tree.validate().map_err(js)?;
+        let tree_bytes = paged_repo::encode(&tree);
+        let tree_hash = paged_repo::address(paged_repo::Kind::Tree, &tree_bytes);
+        objects.insert(tree_hash, (paged_repo::Kind::Tree, tree_bytes));
+        let ctx = Ctx::human(actor, ts as i64);
+        self.repo
+            .commit(objects, tree_hash, ref_name, &ctx, message, None)
+            .map(|h| h.to_hex())
+            .map_err(js)
+    }
+
+    /// One part of a version (a ref or a commit address).
+    #[wasm_bindgen(js_name = readPart)]
+    pub fn read_part(&self, target: &str, path: &str) -> Result<Vec<u8>, JsError> {
+        let commit = match self.repo.head(target) {
+            Some(h) => h,
+            None => hash(target)?,
+        };
+        let tree = self
+            .repo
+            .read_tree(&self.repo.read_commit(&commit).map_err(js)?.tree)
+            .map_err(js)?;
+        let entry = tree
+            .get(path)
+            .ok_or_else(|| JsError::new(&format!("no part {path}")))?;
+        paged_repo::read_part(&self.repo.store, entry).map_err(js)
+    }
+
     /// Commits a saved file on `ref_name`. A save that changed nothing makes
     /// no commit and returns the head.
     pub fn save(

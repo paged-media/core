@@ -116,3 +116,15 @@ pack until the host rewrites the pack.
 
 The npm package `@paged-media/repo-wasm` exposes this to a browser host: the host owns the files,
 the repository says what to write (`flush`) and which object it is missing (`missing:<address>`).
+
+## References
+
+A document points at a part of another repository (a dataset of CSV, Parquet or JSON parts,
+or a part of another document) with a reference:
+
+    paged://[<workspace>.]<repository>/<path>[?ref=<ref>]
+
+Names are lowercase letters, digits and `-`, so the `.` between workspace and repository is
+unambiguous. A ref may contain `/` (`agent/<run>/<name>`), so it travels percent-encoded in
+the query; without one it is `main`. `PagedRef` in `paged-repo` parses and prints them. A
+host resolves one from its own library first and from its server second.

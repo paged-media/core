@@ -28,6 +28,7 @@ mod object;
 mod pack;
 mod package;
 mod policy;
+mod reference;
 mod repo;
 mod store;
 mod sync;
@@ -46,6 +47,7 @@ pub use package::{
     HISTORY_PREFIX,
 };
 pub use policy::{Autonomy, Policy, RefKind, Role};
+pub use reference::PagedRef;
 pub use repo::{Ctx, Repo};
 pub use store::{MemoryStore, Store};
 pub use sync::{missing, pack_of, push, reachable};
