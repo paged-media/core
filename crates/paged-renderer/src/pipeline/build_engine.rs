@@ -6825,6 +6825,14 @@ fn emit_paragraph_lines(
         // re-emit) running headers pick up the matching paragraph on this
         // very page.
         let host_page = em.chain_pages.get(em.frame_idx).copied().unwrap_or(0);
+        let caption_link = paragraph
+            .runs
+            .iter()
+            .filter_map(|r| r.text_variable.as_deref())
+            .any(|v| links::is_live_caption(&em.document.designmap, v))
+            .then(|| em.chain.get(em.frame_idx))
+            .flatten()
+            .and_then(|frame| links::caption_link(em.document, frame));
         let ctx = links::VarResolveCtx {
             designmap: &em.document.designmap,
             total_pages,
@@ -6833,6 +6841,7 @@ fn emit_paragraph_lines(
             numbering: em.page_numbering,
             page_index: host_page,
             running_headers: em.running_headers,
+            caption_link,
         };
         paragraph
             .runs
