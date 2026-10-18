@@ -1257,6 +1257,8 @@ pub enum GeneratedKind {
     AnchoredObject,
     /// An editorial note's place (ADR 172), which prints nothing.
     Note,
+    /// A tracked deletion's place (D-01), which prints nothing.
+    TrackedDeletion,
 }
 
 /// A [`GeneratedSpan`] before it is cut to a line: a byte range of its

@@ -568,6 +568,7 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
     let (moved_frames, moved_offsets) = take_anchors_from(para, split_char);
     let (moved_notes, moved_table) = take_notes_and_table_from(para, split_char);
     let moved_editorial = take_editorial_notes_from(para, split_char);
+    let moved_deletions = take_tracked_deletions_from(para, split_char);
     // Tail runs that come AFTER the split point move to the new
     // paragraph. The split-point run itself is split into two halves;
     // the right half becomes the first run of the new paragraph.
@@ -592,6 +593,7 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
         anchored_frame_offsets: moved_offsets,
         footnotes: moved_notes,
         notes: moved_editorial,
+        tracked_deletions: moved_deletions,
         table,
         table_anchor,
         ..Default::default()
@@ -628,6 +630,19 @@ fn drop_notes_in(para: &mut paged_model::Paragraph, from: u32, to: u32) {
             !(from..to).contains(&at)
         });
     }
+    // D-01 — a tracked deletion goes with its place: the k-th marker is
+    // the k-th entry (left alone when the two disagree).
+    if !para.tracked_deletions.is_empty() {
+        let markers = markers(para, paged_model::TRACKED_DELETION_MARKER);
+        if markers.len() == para.tracked_deletions.len() {
+            let mut k = 0usize;
+            para.tracked_deletions.retain(|_| {
+                let at = markers[k];
+                k += 1;
+                !(from..to).contains(&at)
+            });
+        }
+    }
     // ADR 172 — an editorial note goes with its place, as InDesign
     // deletes it with the character.
     if !para.notes.is_empty() {
@@ -640,6 +655,26 @@ fn drop_notes_in(para: &mut paged_model::Paragraph, from: u32, to: u32) {
             !(from..to).contains(&at)
         });
     }
+}
+
+/// Remove from `para` the tracked deletions standing at character `from`
+/// or later (D-01): they go with their markers to the paragraph a split
+/// starts.
+fn take_tracked_deletions_from(
+    para: &mut paged_model::Paragraph,
+    from: u32,
+) -> Vec<paged_model::TrackedChange> {
+    let before = para
+        .runs
+        .iter()
+        .flat_map(|r| r.text.chars())
+        .take(from as usize)
+        .filter(|c| *c == paged_model::TRACKED_DELETION_MARKER)
+        .count();
+    if before >= para.tracked_deletions.len() {
+        return Vec::new();
+    }
+    para.tracked_deletions.split_off(before)
 }
 
 /// Remove from `para` the editorial notes standing at character `from`
@@ -886,6 +921,7 @@ fn apply_delete_range(
         let (moved_notes, moved_table) =
             take_notes_and_table_from(&mut paragraphs[end_para], end_char);
         let moved_editorial = take_editorial_notes_from(&mut paragraphs[end_para], end_char);
+        let moved_deletions = take_tracked_deletions_from(&mut paragraphs[end_para], end_char);
         let end_tail_runs = capture_tail_runs(&paragraphs[end_para], end_local);
         let start_para_ref = &mut paragraphs[start_para];
         truncate_paragraph_to(start_para_ref, start_local);
@@ -909,6 +945,7 @@ fn apply_delete_range(
                 n.anchor += start_char;
                 n
             }));
+        start_para_ref.tracked_deletions.extend(moved_deletions);
         if start_para_ref.table.is_none() {
             if let Some((table, anchor)) = moved_table {
                 start_para_ref.table = Some(table);
@@ -1311,6 +1348,76 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// D-01 — "Hello" + a tracked deletion's place + " world".
+    fn model_with_deletion() -> CanvasModel {
+        let mut model = CanvasModel::load("d", &small_idml(), CanvasOptions::default()).unwrap();
+        let para = &mut model.scene_mut().stories[0].story.paragraphs[0];
+        para.runs[0].text = format!("Hello{} world", paged_model::TRACKED_DELETION_MARKER);
+        para.tracked_deletions = vec![paged_model::TrackedChange {
+            change_type: "DeletedText".into(),
+            user_name: Some("Reviewer".into()),
+            deleted_text: Some("cruel ".into()),
+            ..Default::default()
+        }];
+        model
+    }
+
+    fn delete(model: &mut CanvasModel, start: u32, end: u32) {
+        apply(
+            model.scene_mut(),
+            &TextOp::DeleteRange {
+                story_id: "story1".into(),
+                start,
+                end,
+                recovered: String::new(),
+                unseed: false,
+                keep_run: false,
+                cell: None,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_tracked_deletion_goes_with_its_place() {
+        let mut model = model_with_deletion();
+        assert_eq!(model.tracked_changes().len(), 1);
+        assert_eq!(model.tracked_changes()[0].offset, 5);
+        assert_eq!(model.tracked_changes()[0].text, "cruel ");
+        // Text before it moves its place, not the deletion's identity.
+        delete(&mut model, 0, 2);
+        assert_eq!(model.tracked_changes()[0].offset, 3);
+        // Deleting its character (three bytes of UTF-8) deletes it.
+        delete(&mut model, 3, 6);
+        assert!(model.tracked_changes().is_empty());
+    }
+
+    #[test]
+    fn a_tracked_deletion_follows_a_split_and_a_merge() {
+        let mut model = model_with_deletion();
+        apply(
+            model.scene_mut(),
+            &TextOp::InsertText {
+                story_id: "story1".into(),
+                offset: 2,
+                text: "\n".into(),
+                cell: None,
+                restore: None,
+            },
+        )
+        .unwrap();
+        let paras = &model.scene().stories[0].story.paragraphs;
+        assert_eq!(paras.len(), 2);
+        assert!(paras[0].tracked_deletions.is_empty());
+        assert_eq!(paras[1].tracked_deletions.len(), 1, "it went with its text");
+        // Joining the paragraphs again brings it back.
+        delete(&mut model, 2, 3);
+        let paras = &model.scene().stories[0].story.paragraphs;
+        assert_eq!(paras.len(), 1);
+        assert_eq!(paras[0].tracked_deletions.len(), 1);
+        assert_eq!(model.tracked_changes()[0].offset, 5);
     }
 
     #[test]
