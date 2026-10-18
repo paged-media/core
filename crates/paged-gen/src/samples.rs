@@ -19,6 +19,7 @@ pub mod anchored;
 pub mod annual_base;
 pub mod baseline_grid;
 pub mod blank_paragraphs;
+pub mod chain_widths;
 pub mod column_rules;
 pub mod composer;
 pub mod conditions;
@@ -166,6 +167,7 @@ pub const SAMPLES: &[&str] = &[
     "mixed-leading",
     "keeps",
     "start-paragraph",
+    "chain-widths",
     "span-columns",
     "split-boundaries",
     "forced-line-break",
@@ -218,6 +220,7 @@ pub const SAMPLES: &[&str] = &[
     "footnote-straddle",
     "footnote-split",
     "footnote-nosplit",
+    "footnote-split-narrow",
     "toc",
     "index",
     "xref",
@@ -271,6 +274,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "mixed-leading" => mixed_leading::build(),
         "keeps" => keeps::build(),
         "start-paragraph" => start_paragraph::build(),
+        "chain-widths" => chain_widths::build(),
         "span-columns" => span_columns::build(),
         "split-boundaries" => split_boundaries::build(),
         "forced-line-break" => forced_line_break::build(),
@@ -302,6 +306,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "footnote-straddle" => footnote_columns::build(&footnote_columns::STRADDLE),
         "footnote-split" => footnote_split::build(&footnote_split::SPLIT),
         "footnote-nosplit" => footnote_split::build(&footnote_split::NOSPLIT),
+        "footnote-split-narrow" => footnote_split::build(&footnote_split::SPLIT_NARROW),
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
         "gradient-geometry" => gradient_geometry::build(),
@@ -356,7 +361,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            99,
+            101,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

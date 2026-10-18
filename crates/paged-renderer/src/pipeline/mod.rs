@@ -846,6 +846,13 @@ pub struct EmittedFootnote {
     /// The entry continues a note from an earlier column or frame: it
     /// heads its area, under the continuing rule (ADR 161).
     pub continued: bool,
+    /// Where a continued note's text resumes (ADR 178): the segment of
+    /// the note (a paragraph, or a piece a forced line break splits off)
+    /// and the byte in that segment's shaped text where the next line
+    /// starts. Its lines are composed from there at its own area's width,
+    /// as InDesign recomposes a note's continuation in a frame of another
+    /// width. `None` for a note's first area.
+    pub resume_at: Option<(u32, u32)>,
     /// Page-local baseline of the line holding the note's reference: the
     /// pool never rises above it (see `emit_footnote_pools`).
     pub ref_baseline_pt: f32,
@@ -1421,9 +1428,19 @@ pub fn build_document(
         let mut changed = false;
         for story in &growing {
             let count = counts[story];
+            // A story needs another page when it drops text, or when a
+            // note of its has no column or frame left to continue in
+            // (C-44): the grow rule paginates notes as Word does. InDesign
+            // does not count a note's overset as the story's
+            // (`footnote-reflow-probe`: a split note past the last frame
+            // leaves `overflows` false), but its documents carry no grow
+            // rule — Word's (ADR 034) do.
             let overset = built.diagnostics.items.iter().any(|d| {
-                d.code == crate::diagnostics::DiagnosticCode::OversetTextDropped
-                    && d.story_id.as_deref() == Some(story.as_str())
+                matches!(
+                    d.code,
+                    crate::diagnostics::DiagnosticCode::OversetTextDropped
+                        | crate::diagnostics::DiagnosticCode::FootnoteOverflow
+                ) && d.story_id.as_deref() == Some(story.as_str())
             });
             if overset {
                 let tries = estimated.entry(story.as_str()).or_insert(0);
@@ -1440,14 +1457,22 @@ pub fn build_document(
                     changed = true;
                 }
             } else if count > 0 {
-                // Drop trailing generated frames that received no line.
+                // Drop trailing generated frames that received no line and
+                // no note of the story's (a page grown for a note's
+                // continuation holds only that).
                 let lines = built.story_layout(story);
                 let mut used = count;
                 while used > 0 {
                     let id = paged_scene::grow::generated_frame_id(story, used);
-                    if lines
-                        .iter()
-                        .any(|l| l.frame_id.as_deref() == Some(id.as_str()))
+                    let page = paged_scene::grow::generated_page_id(story, used);
+                    let holds_note = built.pages.iter().any(|p| {
+                        p.id.as_str() == page
+                            && p.footnotes.iter().any(|f| f.host_story_id == *story)
+                    });
+                    if holds_note
+                        || lines
+                            .iter()
+                            .any(|l| l.frame_id.as_deref() == Some(id.as_str()))
                     {
                         break;
                     }
