@@ -30,7 +30,7 @@ use crate::{address, verify_chain, Error, Hash, Kind, Store};
 
 const INDEX_RECORD: usize = 32 + 1 + 8 + 4;
 
-pub(crate) fn write_record(out: &mut Vec<u8>, kind: Kind, hash: &Hash, bytes: &[u8]) -> u64 {
+pub fn write_record(out: &mut Vec<u8>, kind: Kind, hash: &Hash, bytes: &[u8]) -> u64 {
     out.push(kind.tag());
     out.extend_from_slice(&hash.0);
     out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
@@ -40,7 +40,7 @@ pub(crate) fn write_record(out: &mut Vec<u8>, kind: Kind, hash: &Hash, bytes: &[
 }
 
 /// Every record in `raw`, verified against its address.
-pub(crate) fn read_records(raw: &[u8]) -> Result<Vec<(Kind, Hash, Vec<u8>)>, Error> {
+pub fn read_records(raw: &[u8]) -> Result<Vec<(Kind, Hash, Vec<u8>)>, Error> {
     let mut out = Vec::new();
     let mut at = 0usize;
     while at < raw.len() {

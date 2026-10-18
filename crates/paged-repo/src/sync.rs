@@ -94,3 +94,13 @@ pub fn push<A: Store, B: Store>(
     remote.receive(objects, ref_name, expected, Some(head), ctx, false)?;
     Ok(head)
 }
+
+/// The objects `hashes` names, read from `store` and written as one pack: what
+/// a client uploads after the remote said which it lacks.
+pub fn pack_of(store: &impl Store, objects: &[(Kind, Hash)]) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::new();
+    for (kind, h) in objects {
+        crate::pack::write_record(&mut out, *kind, h, &read(store, *kind, h)?);
+    }
+    Ok(out)
+}

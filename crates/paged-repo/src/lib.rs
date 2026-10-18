@@ -40,11 +40,11 @@ pub use object::{
     decode, encode, Actor, ActorKind, ChunkList, Commit, EntryKind, ImportedFrom, Provenance, Tree,
     TreeEntry,
 };
-pub use pack::{faulting, Flush, Loc, PackFile, PackStore};
+pub use pack::{faulting, read_records, write_record, Flush, Loc, PackFile, PackStore};
 pub use package::{
     bundle_parts, import, project, read_part, Bundle, Snapshot, CHUNK_THRESHOLD, HISTORY_PREFIX,
 };
 pub use policy::{Autonomy, Policy, RefKind, Role};
 pub use repo::{Ctx, Repo};
 pub use store::{MemoryStore, Store};
-pub use sync::{missing, push, reachable};
+pub use sync::{missing, pack_of, push, reachable};
