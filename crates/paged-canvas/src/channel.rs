@@ -2777,6 +2777,12 @@ pub enum CollectionName {
     /// Backs `paged.insertNote` / `editNote` / `deleteNote` /
     /// `convertNoteToText` callers and a Notes panel.
     Notes,
+    /// D-02 — the document's XML tags (`XML/Tags.xml`), one row per tag.
+    XmlTags,
+    /// D-02 — the document's XML structure depth-first, one row per
+    /// element: its tag, depth, what it tags, its attributes. An element
+    /// tagging a story is followed by the elements tagging its ranges.
+    XmlElements,
     /// D-01 — the document's tracked changes, one row per change in story
     /// order: its story, the story offset of its place, its kind, author,
     /// date and text. Deletions today; tracked insertions read as the
@@ -2843,6 +2849,8 @@ impl CollectionName {
             Self::IndexTopics => "indexTopics",
             Self::Footnotes => "footnotes",
             Self::Notes => "notes",
+            Self::XmlTags => "xmlTags",
+            Self::XmlElements => "xmlElements",
             Self::TrackedChanges => "trackedChanges",
             Self::Endnotes => "endnotes",
             Self::Inks => "inks",
@@ -2881,6 +2889,8 @@ impl CollectionName {
             "indexTopics" => Self::IndexTopics,
             "footnotes" => Self::Footnotes,
             "notes" => Self::Notes,
+            "xmlTags" => Self::XmlTags,
+            "xmlElements" => Self::XmlElements,
             "trackedChanges" => Self::TrackedChanges,
             "endnotes" => Self::Endnotes,
             "inks" => Self::Inks,
@@ -3574,6 +3584,24 @@ pub struct EndnoteSummary {
     pub label: Option<String>,
     /// Its text, without its number and separator.
     pub text: String,
+}
+
+/// D-02 — one XML element of the document's structure. Backs
+/// `documentCollection:xmlElements`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct XmlElementSummary {
+    pub self_id: String,
+    /// The tag's name (`Article`).
+    pub tag: String,
+    /// 0 for the root.
+    pub depth: u32,
+    /// The story or page item it tags, when it tags one.
+    pub content: Option<String>,
+    /// The story its text range stands in, when it tags a range.
+    pub story_id: Option<String>,
+    pub attributes: Vec<(String, String)>,
 }
 
 /// ADR 172 — one editorial note. Backs `documentCollection:notes`.

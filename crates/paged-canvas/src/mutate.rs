@@ -1350,6 +1350,56 @@ mod tests {
         buf
     }
 
+    /// D-02 — the structure reads depth-first, a story's range elements
+    /// under the element that tags the story.
+    #[test]
+    fn the_xml_structure_reads_depth_first_into_tagged_stories() {
+        use paged_model::XmlElement;
+        let mut model = CanvasModel::load("d", &small_idml(), CanvasOptions::default()).unwrap();
+        let el =
+            |id: &str, tag: &str, content: Option<&str>, children: Vec<XmlElement>| XmlElement {
+                self_id: id.into(),
+                tag: format!("XMLTag/{tag}"),
+                content: content.map(str::to_string),
+                children,
+                ..Default::default()
+            };
+        let scene = model.scene_mut();
+        scene.designmap.xml_root = Some(el(
+            "r",
+            "Root",
+            None,
+            vec![
+                el("a", "Article", Some("story1"), vec![]),
+                el("f", "Figure", Some("tf9"), vec![]),
+            ],
+        ));
+        scene.stories[0].story.xml_elements = vec![el(
+            "a",
+            "Article",
+            Some("story1"),
+            vec![
+                el("t", "Title", None, vec![]),
+                el("b", "Body", None, vec![]),
+            ],
+        )];
+        let rows: Vec<(String, u32, Option<String>)> = model
+            .xml_elements()
+            .into_iter()
+            .map(|r| (r.tag, r.depth, r.story_id))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("Root".into(), 0, None),
+                ("Article".into(), 1, None),
+                ("Title".into(), 2, Some("story1".into())),
+                ("Body".into(), 2, Some("story1".into())),
+                ("Figure".into(), 1, None),
+            ]
+        );
+    }
+
     /// D-01 — "Hello" + a tracked deletion's place + " world".
     fn model_with_deletion() -> CanvasModel {
         let mut model = CanvasModel::load("d", &small_idml(), CanvasOptions::default()).unwrap();

@@ -9380,6 +9380,57 @@ impl CanvasModel {
         out
     }
 
+    /// D-02 — the document's XML structure, depth-first: the back story's
+    /// tree, with each element that tags a story followed by the elements
+    /// tagging the story's ranges.
+    pub fn xml_elements(&self) -> Vec<crate::channel::XmlElementSummary> {
+        fn tag_name(tag: &str) -> String {
+            tag.strip_prefix("XMLTag/").unwrap_or(tag).to_string()
+        }
+        fn walk(
+            el: &paged_model::XmlElement,
+            depth: u32,
+            story_id: Option<&str>,
+            scene: &paged_scene::Document,
+            out: &mut Vec<crate::channel::XmlElementSummary>,
+        ) {
+            out.push(crate::channel::XmlElementSummary {
+                self_id: el.self_id.clone(),
+                tag: tag_name(&el.tag),
+                depth,
+                content: el.content.clone(),
+                story_id: story_id.map(str::to_string),
+                attributes: el.attributes.clone(),
+            });
+            for child in &el.children {
+                walk(child, depth + 1, story_id, scene, out);
+            }
+            // An element tagging a story: the story's own elements of the
+            // same `Self` hold its ranges.
+            if let Some(story) = el
+                .content
+                .as_deref()
+                .and_then(|id| scene.stories.iter().find(|s| s.self_id == id))
+            {
+                for top in story
+                    .story
+                    .xml_elements
+                    .iter()
+                    .filter(|e| e.self_id == el.self_id)
+                {
+                    for child in &top.children {
+                        walk(child, depth + 1, Some(&story.self_id), scene, out);
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(root) = &self.scene.designmap.xml_root {
+            walk(root, 0, None, &self.scene, &mut out);
+        }
+        out
+    }
+
     /// D-01 — the document's tracked deletions, each at the story offset
     /// of its marker.
     pub fn tracked_changes(&self) -> Vec<crate::channel::TrackedChangeSummary> {
@@ -10028,6 +10079,8 @@ impl CanvasModel {
             IndexTopics => serde_json::to_value(self.index_topics()).unwrap_or_default(),
             Footnotes => serde_json::to_value(self.footnotes()).unwrap_or_default(),
             Notes => serde_json::to_value(self.notes()).unwrap_or_default(),
+            XmlTags => serde_json::to_value(&self.scene.designmap.xml_tags).unwrap_or_default(),
+            XmlElements => serde_json::to_value(self.xml_elements()).unwrap_or_default(),
             TrackedChanges => serde_json::to_value(self.tracked_changes()).unwrap_or_default(),
             Endnotes => serde_json::to_value(self.endnotes()).unwrap_or_default(),
             Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
