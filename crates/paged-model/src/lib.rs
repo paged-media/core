@@ -4121,6 +4121,11 @@ pub struct TextVariable {
     /// `<FileNameVariablePreference IncludePath="true">`.
     #[serde(default)]
     pub include_path: bool,
+    /// `<CaptionMetadataVariablePreference MetadataProviderName>` of a
+    /// `LiveCaptionType` variable: the link fact the caption prints
+    /// (`$ID/#LinkInfoNameStr` = the linked file's name).
+    #[serde(default)]
+    pub metadata_provider: Option<String>,
 }
 
 /// `<ChapterNumberPreference>` (in `Resources/Preferences.xml`): the
