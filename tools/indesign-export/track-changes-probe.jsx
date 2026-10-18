@@ -20,13 +20,25 @@
 // story's contents read; exports IDML and PDF. Then accepts the first
 // change and rejects the second, and reports the contents again.
 //
-// Inputs: PROBE_OUT (JSON), PROBE_IDML, PROBE_PDF.
+// With PROBE_IN (an absolute .idml) it opens that package instead and
+// reports its first story's changes and contents, and exports its PDF.
+//
+// Inputs: PROBE_OUT (JSON), PROBE_IDML, PROBE_PDF, PROBE_IN (optional).
 (function () {
     app.scriptPreferences.userInteractionLevel = UserInteractionLevels.NEVER_INTERACT;
     function q(s) { return '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\r\n\t]/g, " ") + '"'; }
     var log = [];
-    var doc = app.documents.add(true);
-    try { build(); } finally { doc.close(SaveOptions.NO); }
+    var IN = $.global.PROBE_IN;
+    var doc = IN ? app.open(File(IN), true) : app.documents.add(true);
+    try { if (IN) read(); else build(); } finally { doc.close(SaveOptions.NO); }
+    function read() {
+        doc.recompose();
+        var story = doc.stories[0];
+        var out = File($.global.PROBE_OUT); out.encoding = "UTF-8"; out.open("w");
+        out.write('{"changes": ' + changes(story) + ', "contents": ' + q(String(story.contents)) + "}");
+        out.close();
+        doc.exportFile(ExportFormat.PDF_TYPE, File($.global.PROBE_PDF));
+    }
     function changes(story) {
         var out = [];
         for (var i = 0; i < story.changes.length; i++) {

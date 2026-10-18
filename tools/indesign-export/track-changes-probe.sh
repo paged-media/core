@@ -30,6 +30,7 @@ APP="${INDESIGN_APP:-Adobe InDesign 2025}"
 SHIM="$(mktemp -t paged-track-shim).jsx"
 trap 'rm -f "$SHIM"' EXIT
 cat > "$SHIM" <<JSX
+var PROBE_IN = "${PROBE_IN:-}";
 var PROBE_OUT = "$OUT";
 var PROBE_IDML = "$IDML";
 var PROBE_PDF = "$PDF";

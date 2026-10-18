@@ -941,6 +941,7 @@ pub(super) struct BreakSegment {
 /// footnotes and index markers, which ride the first segment).
 fn continuation(paragraph: &paged_model::Paragraph) -> paged_model::Paragraph {
     paged_model::Paragraph {
+        tracked_deletions: Vec::new(),
         paragraph_style: paragraph.paragraph_style.clone(),
         justification: paragraph.justification,
         first_line_indent: paragraph.first_line_indent,
@@ -1040,6 +1041,7 @@ pub(super) fn split_paragraph_into_segments(
     // then close the sub-paragraph and start a new one.
     let mut subs: Vec<BreakSegment> = Vec::new();
     let mut current = paged_model::Paragraph {
+        tracked_deletions: Vec::new(),
         paragraph_style: paragraph.paragraph_style.clone(),
         justification: paragraph.justification,
         first_line_indent: paragraph.first_line_indent,
@@ -1329,6 +1331,7 @@ pub(super) fn split_paragraph_into_segments(
             opens_paragraph: true,
             closes_paragraph: true,
             paragraph: paged_model::Paragraph {
+                tracked_deletions: Vec::new(),
                 paragraph_style: paragraph.paragraph_style.clone(),
                 justification: paragraph.justification,
                 first_line_indent: paragraph.first_line_indent,

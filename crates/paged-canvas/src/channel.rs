@@ -2777,6 +2777,11 @@ pub enum CollectionName {
     /// Backs `paged.insertNote` / `editNote` / `deleteNote` /
     /// `convertNoteToText` callers and a Notes panel.
     Notes,
+    /// D-01 — the document's tracked changes, one row per change in story
+    /// order: its story, the story offset of its place, its kind, author,
+    /// date and text. Deletions today; tracked insertions read as the
+    /// story's text and are not listed yet.
+    TrackedChanges,
     /// Concept 2 — the Ink Manager's ink list (one row per spot
     /// swatch, carrying its output-time settings).
     Inks,
@@ -2838,6 +2843,7 @@ impl CollectionName {
             Self::IndexTopics => "indexTopics",
             Self::Footnotes => "footnotes",
             Self::Notes => "notes",
+            Self::TrackedChanges => "trackedChanges",
             Self::Endnotes => "endnotes",
             Self::Inks => "inks",
             Self::Sections => "sections",
@@ -2875,6 +2881,7 @@ impl CollectionName {
             "indexTopics" => Self::IndexTopics,
             "footnotes" => Self::Footnotes,
             "notes" => Self::Notes,
+            "trackedChanges" => Self::TrackedChanges,
             "endnotes" => Self::Endnotes,
             "inks" => Self::Inks,
             "sections" => Self::Sections,
@@ -3585,6 +3592,22 @@ pub struct NoteSummary {
     pub creation_date: Option<String>,
     pub modification_date: Option<String>,
     pub collapsed: bool,
+}
+
+/// D-01 — one tracked change. Backs `documentCollection:trackedChanges`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedChangeSummary {
+    pub story_id: String,
+    /// The story char offset (contiguous) of its place.
+    pub offset: u32,
+    /// `InsertedText`, `DeletedText` or `MovedText`.
+    pub change_type: String,
+    pub user_name: Option<String>,
+    pub date: Option<String>,
+    /// The text it inserted or deleted, paragraphs separated by U+000D.
+    pub text: String,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<ConditionSet>` definition. Backs
