@@ -20,7 +20,7 @@ zip = { workspace = true }
 flate2 = { workspace = true }
 
 [dev-dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "57de8f935b6d9190b0f90e6bf477a1a2c5cdd2e7" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "468262044817a2b8bef1540b67759bf979e577af" }
 # A hermetic IDML fixture to import; the reconstruct path under test never
 # touches IDML. paged-renderer builds both docs for the digest comparison
 # (default-features off — the digest needs layout, not the CPU rasterizer).

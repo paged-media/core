@@ -347,14 +347,15 @@ fn live_caption_prints_the_touching_images_link_name() {
     let caption = document
         .designmap
         .text_variables
-        .iter_mut()
+        .iter()
         .find(|v| v.name.as_deref() == Some("Caption Name"))
         .expect("InDesign wrote the caption variable");
-    // Until the importer reads `<CaptionMetadataVariablePreference>`.
-    if caption.metadata_provider.is_none() {
-        caption.metadata_provider = Some("$ID/#LinkInfoNameStr".to_string());
-        caption.text_before = Some("Image: ".to_string());
-    }
+    // The importer reads `<CaptionMetadataVariablePreference>`.
+    assert_eq!(
+        caption.metadata_provider.as_deref(),
+        Some("$ID/#LinkInfoNameStr")
+    );
+    assert_eq!(caption.text_before.as_deref(), Some("Image: "));
     let built = pipeline::build_document(&document, &opts).unwrap();
     let text = glyph_text(&built.pages[0]);
     assert!(text.contains("Image:alpha-image.png"), "{text:?}");
