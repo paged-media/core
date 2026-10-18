@@ -1760,7 +1760,7 @@ dependencies = [
 [[package]]
 name = "idml-export"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=468262044817a2b8bef1540b67759bf979e577af#468262044817a2b8bef1540b67759bf979e577af"
+source = "git+https://github.com/paged-media/plugin-publish?rev=05c57195d9a7514357cede90d89d987141bf01d8#05c57195d9a7514357cede90d89d987141bf01d8"
 dependencies = [
  "base64",
  "flate2",
@@ -1776,7 +1776,7 @@ dependencies = [
 [[package]]
 name = "idml-import"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=468262044817a2b8bef1540b67759bf979e577af#468262044817a2b8bef1540b67759bf979e577af"
+source = "git+https://github.com/paged-media/plugin-publish?rev=05c57195d9a7514357cede90d89d987141bf01d8#05c57195d9a7514357cede90d89d987141bf01d8"
 dependencies = [
  "base64",
  "bytes",
