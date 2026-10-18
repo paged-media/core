@@ -1472,12 +1472,29 @@ pub struct GlyphRunEntry {
     /// first char v1 (multi-char mapping is a refinement).
     pub unicode: Option<char>,
     pub is_stroke: bool,
+    /// The paragraph this glyph is text of, for a tagged PDF's logical
+    /// structure (ADR 182): the producer's [`GlyphRunTable::current`]
+    /// when the glyph was captured. `None` for text no paragraph owns.
+    pub structure: Option<StructKey>,
+}
+
+/// A paragraph of the document's logical structure (ADR 182): its
+/// story's ordinal in document order and its index in that story. A
+/// tagged PDF sets each key's text in one paragraph element, the keys in
+/// order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StructKey {
+    pub story: u32,
+    pub paragraph: u32,
 }
 
 /// Concept 3 — the per-list glyph capture (see [`GlyphRunEntry`]).
 #[derive(Debug, Default)]
 pub struct GlyphRunTable {
     pub entries: Vec<GlyphRunEntry>,
+    /// The paragraph the producer is emitting now (ADR 182): every entry
+    /// pushed while it is set carries it as [`GlyphRunEntry::structure`].
+    pub current: Option<StructKey>,
 }
 
 impl GlyphRunTable {

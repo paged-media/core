@@ -52,6 +52,13 @@ pub struct PdfOptions {
     /// 0-based inclusive page range, e.g. `0-9`.
     #[arg(long, value_name = "FROM-TO")]
     pub pages: Option<String>,
+    /// Write the document's bookmarks as the PDF outline.
+    #[arg(long)]
+    pub bookmarks: bool,
+    /// Create Tagged PDF: a structure tree of stories and paragraphs,
+    /// as InDesign's "Create Tagged PDF" writes it.
+    #[arg(long)]
+    pub tagged: bool,
 }
 
 pub fn run(
@@ -136,6 +143,8 @@ fn export_pdf(session: &mut Session, pdf: &PdfOptions) -> Result<Vec<u8>> {
         registration_marks: pdf.marks,
         color_bars: pdf.marks,
         page_info: pdf.marks,
+        bookmarks: pdf.bookmarks,
+        tagged: pdf.tagged,
         ..Default::default()
     };
 

@@ -390,6 +390,7 @@ mod tests {
             paint: paged_compose::Paint::Solid(paged_compose::Color::BLACK),
             unicode: Some('x'),
             is_stroke: false,
+            structure: None,
         };
         emit_text_slice(&mut content, "F1", 12.0, 1000.0, &[(&entry, 1)]);
         let ops = String::from_utf8(content.finish().to_vec()).unwrap();

@@ -379,6 +379,34 @@
         },
         {
           "defaults": [],
+          "help": "Write the document's bookmarks as the PDF outline",
+          "long": "bookmarks",
+          "name": "bookmarks",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "BOOKMARKS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Create Tagged PDF: a structure tree of stories and paragraphs, as InDesign's \"Create Tagged PDF\" writes it",
+          "long": "tagged",
+          "name": "tagged",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "TAGGED"
+          ]
+        },
+        {
+          "defaults": [],
           "help": "Font file or directory to make available, repeatable",
           "long": "fonts",
           "name": "fonts",
@@ -645,6 +673,34 @@
           "takesValues": true,
           "valueNames": [
             "FROM-TO"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Write the document's bookmarks as the PDF outline",
+          "long": "bookmarks",
+          "name": "bookmarks",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "BOOKMARKS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Create Tagged PDF: a structure tree of stories and paragraphs, as InDesign's \"Create Tagged PDF\" writes it",
+          "long": "tagged",
+          "name": "tagged",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "TAGGED"
           ]
         },
         {
@@ -3695,6 +3751,34 @@
         },
         {
           "defaults": [],
+          "help": "Write the document's bookmarks as the PDF outline",
+          "long": "bookmarks",
+          "name": "bookmarks",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "BOOKMARKS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Create Tagged PDF: a structure tree of stories and paragraphs, as InDesign's \"Create Tagged PDF\" writes it",
+          "long": "tagged",
+          "name": "tagged",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "TAGGED"
+          ]
+        },
+        {
+          "defaults": [],
           "help": "Font file or directory to make available, repeatable",
           "long": "fonts",
           "name": "fonts",
@@ -3911,6 +3995,34 @@
           "takesValues": true,
           "valueNames": [
             "FROM-TO"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Write the document's bookmarks as the PDF outline",
+          "long": "bookmarks",
+          "name": "bookmarks",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "BOOKMARKS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Create Tagged PDF: a structure tree of stories and paragraphs, as InDesign's \"Create Tagged PDF\" writes it",
+          "long": "tagged",
+          "name": "tagged",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "TAGGED"
           ]
         },
         {
@@ -4386,6 +4498,34 @@
           "takesValues": true,
           "valueNames": [
             "FROM-TO"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Write the document's bookmarks as the PDF outline",
+          "long": "bookmarks",
+          "name": "bookmarks",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "BOOKMARKS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Create Tagged PDF: a structure tree of stories and paragraphs, as InDesign's \"Create Tagged PDF\" writes it",
+          "long": "tagged",
+          "name": "tagged",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "TAGGED"
           ]
         },
         {

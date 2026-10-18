@@ -121,6 +121,8 @@ pub fn export_page(
         content_bbox,
         diagnostics,
         base_ctm: [1.0, 0.0, 0.0, -1.0, off_left, off_bottom + trim_h],
+        mcids: Vec::new(),
+        form_depth: 0,
     };
 
     let mut content = Content::new();
@@ -139,6 +141,7 @@ pub fn export_page(
     let Walker {
         resources: mut page_resources,
         pending_forms,
+        mcids,
         ..
     } = walker;
 
@@ -251,6 +254,7 @@ pub fn export_page(
         resources: page_resources,
         resources_ref,
         link_annots,
+        mcids,
     });
     Ok(())
 }
@@ -345,6 +349,12 @@ struct Walker<'a, 'b> {
     /// matrix maps pattern space to the page's DEFAULT space, not the
     /// CTM in force when it paints, so a gradient stroke needs it.
     base_ctm: [f32; 6],
+    /// ADR 182 — the page's marked content, by MCID: the paragraph each
+    /// marked text object is text of. Only the page's own content stream
+    /// is marked; text captured into a form (a transparency group, a
+    /// soft mask's artwork) stays unmarked (`form_depth`).
+    mcids: Vec<paged_compose::StructKey>,
+    form_depth: usize,
 }
 
 impl Walker<'_, '_> {
@@ -527,6 +537,7 @@ impl Walker<'_, '_> {
                                         && (e.font_size - entry.font_size).abs() < 1e-3
                                         && paint_key(&e.paint) == paint_key(&entry.paint)
                                         && !e.is_stroke
+                                        && (!input.options.tagged || e.structure == entry.structure)
                                 }) =>
                             {
                                 slice.extend(es.iter().copied());
@@ -565,6 +576,21 @@ impl Walker<'_, '_> {
                                 .map(|f| f.units_per_em() as f32)
                                 .unwrap_or(1000.0)
                         });
+                        // ADR 182 — a paragraph's text is its marked
+                        // content, one MCID per text object.
+                        let mcid = entry
+                            .structure
+                            .filter(|_| input.options.tagged && self.form_depth == 0)
+                            .map(|key| {
+                                self.mcids.push(key);
+                                (self.mcids.len() - 1) as i32
+                            });
+                        if let Some(id) = mcid {
+                            content
+                                .begin_marked_content_with_properties(Name(b"P"))
+                                .properties()
+                                .identify(id);
+                        }
                         content.save_state();
                         crate::color::set_fill_paint(
                             content,
@@ -582,6 +608,9 @@ impl Walker<'_, '_> {
                             &pairs,
                         );
                         content.restore_state();
+                        if mcid.is_some() {
+                            content.end_marked_content();
+                        }
                         i = j;
                         continue;
                     }
@@ -684,7 +713,9 @@ impl Walker<'_, '_> {
                         let end = find_group_end(commands, i);
                         let mut inner = Content::new();
                         let mut inner_stack = StateStack::new();
+                        self.form_depth += 1;
                         self.walk(&mut inner, &mut inner_stack, i + 1..end.min(range.end));
+                        self.form_depth -= 1;
                         inner_stack.flush(&mut inner);
                         let form_ref = self.state.refs.alloc();
                         self.pending_forms.push(PendingForm {
@@ -818,7 +849,9 @@ impl Walker<'_, '_> {
                     // ref, exactly like the blend-group forms.
                     let mut artwork = Content::new();
                     let mut artwork_stack = StateStack::new();
+                    self.form_depth += 1;
                     self.walk(&mut artwork, &mut artwork_stack, i + 1..mid.min(range.end));
+                    self.form_depth -= 1;
                     artwork_stack.flush(&mut artwork);
                     let form_ref = self.state.refs.alloc();
                     self.pending_forms.push(PendingForm {

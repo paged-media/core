@@ -90,6 +90,10 @@ impl CanvasExportSession {
         if wire.bookmarks {
             options.bookmarks = pdf_bookmarks(model.scene(), &built);
         }
+        if wire.tagged {
+            options.tagged = true;
+            options.lang = document_lang(model.scene());
+        }
 
         // Face bytes for every font the glyph tables reference, keyed
         // by `face_id` — the id that resolves to BYTES. `font_id` is
@@ -360,6 +364,56 @@ pub(crate) fn pdf_bookmarks(
         .collect()
 }
 
+/// ADR 182 — the document's language for a tagged PDF's `/Lang`: the
+/// `AppliedLanguage` of `[No paragraph style]`, InDesign's document
+/// default, as a BCP 47 tag. `None` for a language with no tag here.
+pub fn document_lang(document: &paged_scene::Document) -> Option<String> {
+    let name = document
+        .styles
+        .paragraph_styles
+        .get("ParagraphStyle/$ID/[No paragraph style]")
+        .and_then(|s| s.applied_language.as_deref())?;
+    bcp47_of(name)
+}
+
+/// A BCP 47 tag for an IDML `AppliedLanguage` (`$ID/English: USA`,
+/// `Language/$ID/English%3a UK`, `$ID/de_DE_2006`).
+pub fn bcp47_of(name: &str) -> Option<String> {
+    let name = name.rsplit('/').next().unwrap_or(name).replace("%3a", ":");
+    let lower = name.trim().to_ascii_lowercase();
+    // Locale codes: `de_DE_2006` → `de-DE`.
+    let mut parts = lower.split('_');
+    if let (Some(lang), Some(region)) = (parts.next(), parts.next()) {
+        if lang.len() == 2 && region.len() == 2 {
+            return Some(format!("{lang}-{}", region.to_ascii_uppercase()));
+        }
+    }
+    let tag = match lower.as_str() {
+        "english: usa" | "english: usa legal" | "english: usa medical" => "en-US",
+        "english: uk" => "en-GB",
+        "english: canadian" => "en-CA",
+        "german: reformed" | "german: traditional" | "german: 2006 reform" => "de-DE",
+        "german: swiss" | "german: swiss 2006 reform" => "de-CH",
+        "french" => "fr-FR",
+        "french: canadian" => "fr-CA",
+        "spanish: castilian" | "spanish" => "es-ES",
+        "italian" => "it-IT",
+        "dutch" | "dutch: 2005 reform" => "nl-NL",
+        "portuguese" => "pt-PT",
+        "portuguese: brazilian" => "pt-BR",
+        "japanese" => "ja-JP",
+        "danish" => "da-DK",
+        "swedish" => "sv-SE",
+        "norwegian: bokmal" => "nb-NO",
+        "finnish" => "fi-FI",
+        "polish" => "pl-PL",
+        "czech" => "cs-CZ",
+        "russian" => "ru-RU",
+        _ => return None,
+    };
+    Some(tag.to_string())
+}
+
 fn wire_to_options(wire: &ExportPdfWireOptions) -> Result<ExportOptions, String> {
     let standard = match wire.standard.as_deref() {
         None | Some("pdf17") => PdfStandard::Pdf17,
@@ -384,6 +438,8 @@ fn wire_to_options(wire: &ExportPdfWireOptions) -> Result<ExportOptions, String>
     };
     Ok(ExportOptions {
         bookmarks: Vec::new(),
+        tagged: false,
+        lang: None,
         standard,
         color_policy,
         output_condition: wire.output_condition.clone(),
