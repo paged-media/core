@@ -28,18 +28,16 @@ fn export() -> Vec<u8> {
             .join("tests/fixtures/tagged-styles-indesign.idml"),
     )
     .unwrap();
-    let mut document = idml_import::import_idml_doc(&bytes).unwrap();
-    // Until the importer reads `<StyleExportTagMap>`: InDesign's tags.
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
+    // The importer reads each style's `<StyleExportTagMap ExportType="PDF">`.
     for (name, tag) in [("Heading", "H1"), ("Sub", "H2"), ("Folio", "Artifact")] {
         let def = document
             .styles
             .paragraph_styles
-            .values_mut()
+            .values()
             .find(|d| d.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("style {name}"));
-        if def.pdf_export_tag.is_none() {
-            def.pdf_export_tag = Some(tag.to_string());
-        }
+        assert_eq!(def.pdf_export_tag.as_deref(), Some(tag), "{name}");
     }
     let font = std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
