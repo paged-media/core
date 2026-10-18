@@ -3945,6 +3945,7 @@ pub(super) fn build_document_inner(
         })
         .collect();
 
+    let mut structure_roles = std::collections::BTreeMap::new();
     let structure_names = if options.collect_glyph_runs {
         document
             .stories
@@ -3958,13 +3959,17 @@ pub(super) fn build_document_inner(
                             .paragraph_style
                             .as_deref()
                             .unwrap_or("ParagraphStyle/$ID/[No paragraph style]");
-                        let name = document
-                            .styles
-                            .paragraph_styles
-                            .get(id)
+                        let def = document.styles.paragraph_styles.get(id);
+                        let name = def
                             .and_then(|d| d.name.as_deref())
                             .unwrap_or_else(|| id.strip_prefix("ParagraphStyle/").unwrap_or(id));
-                        super::structure_name(name)
+                        let name = super::structure_name(name);
+                        let role =
+                            super::structure_role(def.and_then(|d| d.pdf_export_tag.as_deref()));
+                        structure_roles
+                            .entry(name.clone())
+                            .or_insert_with(|| role.to_string());
+                        name
                     })
                     .collect()
             })
@@ -3982,6 +3987,7 @@ pub(super) fn build_document_inner(
         overset,
         paragraph_starts,
         structure_names,
+        structure_roles,
         grow_passes: 1,
         fresh_pages: fresh,
     })

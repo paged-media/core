@@ -1008,6 +1008,10 @@ pub struct BuiltDocument {
     /// ([`structure_name`]). Filled when glyph runs are collected (the
     /// tagged export reads it); empty otherwise.
     pub structure_names: Vec<Vec<String>>,
+    /// The standard structure type each name in [`Self::structure_names`]
+    /// role-maps to: the style's PDF export tag when it names a heading
+    /// or a paragraph (`H`, `H1`…`H6`, `P`), `P` otherwise.
+    pub structure_roles: std::collections::BTreeMap<String, String>,
     /// ADR 027 §7 / plan step 7 — per page, whether this build laid
     /// any of its content out afresh (rather than splicing it from an emit
     /// cache) AND that content may differ from the previous build's. A
@@ -1038,6 +1042,22 @@ pub fn structure_name(style_name: &str) -> String {
     name.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
+}
+
+/// The standard type a style's PDF export tag role-maps to: a heading
+/// level or `P`. Anything else is written as `P`, as InDesign 20.0.1 wrote
+/// a style tagged `Artifact` (`tagged-styles-probe`).
+pub fn structure_role(pdf_export_tag: Option<&str>) -> &'static str {
+    match pdf_export_tag {
+        Some("H") => "H",
+        Some("H1") => "H1",
+        Some("H2") => "H2",
+        Some("H3") => "H3",
+        Some("H4") => "H4",
+        Some("H5") => "H5",
+        Some("H6") => "H6",
+        _ => "P",
+    }
 }
 
 impl BuiltDocument {

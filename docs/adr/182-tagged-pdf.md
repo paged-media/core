@@ -40,8 +40,9 @@ reads the result. For the `text` and `navigation` fixtures InDesign writes:
   - It writes `Document` → `Article` → one `Story` per story → one element per paragraph, in key
     order. Each paragraph element is named after its paragraph style as InDesign names it (every
     character but an ASCII letter or digit becomes `_`, so `$ID/[No paragraph style]` is
-    `_No_paragraph_style_`), and the role map sends `Article` to `Art`, `Story` to `Sect` and every
-    style name to `P` (amended 2026-10-18, `tagged-styles-probe`). A
+    `_No_paragraph_style_`), and the role map sends `Article` to `Art`, `Story` to `Sect`, and each
+    style name to its PDF export tag when that is a heading (`H`, `H1`…`H6`), else to `P`
+    (amended 2026-10-18, `tagged-styles-probe`: InDesign mapped a style tagged `Artifact` to `P`). A
     paragraph on several pages references its later pages' marks through `/MCR` with `/Pg`.
   - The parent tree maps each page's MCIDs to their paragraphs, and every page gets
     `/StructParents`.
@@ -59,9 +60,10 @@ reads the result. For the `text` and `navigation` fixtures InDesign writes:
   - an ignored test writes the `navigation` export. `pdf-structure.py` reads it as the same tree
     as InDesign's (six elements, one marked-content id per paragraph).
 - Not built yet:
-  - a paragraph style's PDF export tag (`<StyleExportTagMap ExportType="PDF" ExportTag="H1">`) as
-    its role: InDesign maps such a style to `H1`; the engine maps every style to `P`. A style tagged
-    `Artifact` still came out as `P` in InDesign's export;
+  - reading a paragraph style's PDF export tag from IDML (`<StyleExportTagMap ExportType="PDF"
+    ExportTag="H1">`, the importer's half). The model carries it (`pdf_export_tag`) and the role map
+    already honours it: `H`, `H1`…`H6` map to themselves, anything else to `P`, as InDesign wrote a
+    style tagged `Artifact`;
   - text inside transparency groups and soft masks (written into forms, left unmarked);
   - table cells (`Table` / `TR` / `TD`), footnotes, figures with alt text, and artifacts for page
     furniture;

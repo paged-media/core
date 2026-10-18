@@ -5885,6 +5885,11 @@ pub struct ParagraphStyleDef {
     /// `EmptyGrepStyles` — see [`Self::empty_nested_styles`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub empty_grep_styles: Option<bool>,
+    /// The PDF tag of the style's export tagging
+    /// (`<StyleExportTagMap ExportType="PDF" ExportTag="H1">`): the
+    /// standard structure type a tagged PDF role-maps the style to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_export_tag: Option<String>,
 }
 /// One line style (`<AllLineStyles>` list item): `AppliedCharacterStyle`
 /// over the next `LineCount` lines of the paragraph.

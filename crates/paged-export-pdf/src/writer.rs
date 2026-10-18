@@ -469,7 +469,17 @@ fn write_structure(
         match name_of(key) {
             Some(name) => {
                 e.custom_kind(Name(name.as_bytes()));
-                roles.insert(name.to_string(), StructRole::P);
+                let role = match input.doc.structure_roles.get(name).map(String::as_str) {
+                    Some("H") => StructRole::StructuredHeading,
+                    Some("H1") => StructRole::H1,
+                    Some("H2") => StructRole::H2,
+                    Some("H3") => StructRole::H3,
+                    Some("H4") => StructRole::H4,
+                    Some("H5") => StructRole::H5,
+                    Some("H6") => StructRole::H6,
+                    _ => StructRole::P,
+                };
+                roles.insert(name.to_string(), role);
             }
             None => {
                 e.kind(StructRole::P);
