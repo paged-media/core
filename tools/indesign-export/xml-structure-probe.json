@@ -1,0 +1,71 @@
+{
+ "built": {
+  "log": [],
+  "structure": [
+   [
+    0,
+    "Root",
+    "",
+    "﻿﻿"
+   ],
+   [
+    1,
+    "Article",
+    "",
+    "﻿A Tagged Title ﻿﻿The tagged b"
+   ],
+   [
+    2,
+    "Title",
+    "",
+    "A Tagged Title "
+   ],
+   [
+    2,
+    "Body",
+    "",
+    "The tagged body text."
+   ],
+   [
+    1,
+    "Figure",
+    "alt=A grey box",
+    ""
+   ]
+  ]
+ },
+ "edit_saved_by_the_engine_read_back": {
+  "structure": [
+   [
+    0,
+    "Root",
+    "",
+    "﻿﻿"
+   ],
+   [
+    1,
+    "Article",
+    "",
+    "﻿A NEW Tagged Title ﻿﻿The tagg"
+   ],
+   [
+    2,
+    "Title",
+    "",
+    "A NEW Tagged Title "
+   ],
+   [
+    2,
+    "Body",
+    "",
+    "The tagged body text."
+   ],
+   [
+    1,
+    "Figure",
+    "alt=A grey box",
+    ""
+   ]
+  ]
+ }
+}
