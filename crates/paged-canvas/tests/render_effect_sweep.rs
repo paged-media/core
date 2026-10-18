@@ -312,6 +312,25 @@ fn load_sample(name: &str) -> CanvasModel {
     CanvasModel::load("sweep", &bytes, opts).unwrap_or_else(|e| panic!("load {name}: {e:?}"))
 }
 
+/// Put a tracked deletion of "Deleted words. " at the head of the first
+/// story (no generated fixture holds one); its story id.
+fn with_deletion(m: &mut CanvasModel) -> String {
+    let story = m.scene().stories[0].self_id.clone();
+    let para = &mut m.scene_mut().stories[0].story.paragraphs[0];
+    para.runs[0]
+        .text
+        .insert(0, paged_model::TRACKED_DELETION_MARKER);
+    para.tracked_deletions.insert(
+        0,
+        paged_model::TrackedChange {
+            change_type: "DeletedText".into(),
+            deleted_text: Some("Deleted words. ".into()),
+            ..Default::default()
+        },
+    );
+    story
+}
+
 // ── discovery helpers ───────────────────────────────────────────────
 //
 // Every case addresses its target by SEARCHING the loaded model rather
@@ -1695,6 +1714,27 @@ fn text_cases(c: &mut Vec<Case>) {
         "the note's character printed nothing, so taking it out moves no line",
         |m| Mutation::DeleteNote {
             note_id: m.notes()[0].id.clone(),
+        },
+    ));
+    // ADR 184 — a tracked deletion's place prints nothing. Rejecting it
+    // prints its text; accepting it leaves the page as it was.
+    c.push(paints("RejectTrackedChange", "notes", |m| {
+        let story = with_deletion(m);
+        Mutation::RejectTrackedChange {
+            story_id: story,
+            offset: 0,
+        }
+    }));
+    c.push(inert(
+        "AcceptTrackedChange",
+        "notes",
+        "the deletion's place printed nothing, so taking it out moves no line",
+        |m| {
+            let story = with_deletion(m);
+            Mutation::AcceptTrackedChange {
+                story_id: story,
+                offset: 0,
+            }
         },
     ));
     // ADR 173 — bookmarks print nothing; a PDF export writes them as its
