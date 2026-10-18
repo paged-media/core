@@ -303,6 +303,18 @@ pub enum Command {
         #[command(flatten)]
         assets: DocumentOptions,
     },
+    /// Serve the engine over HTTP for paged.server's headless lane: stateless
+    /// `POST /run` calls that bring a document and take back the result.
+    EngineServe {
+        /// Port to listen on.
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// Address to bind. A container binds every address; local use, loopback.
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
     /// The local library of documents `paged mcp` serves.
     Library {
         #[command(subcommand)]

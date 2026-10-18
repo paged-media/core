@@ -5338,6 +5338,116 @@
       "subcommands": []
     },
     {
+      "about": "Serve the engine over HTTP for paged.server's headless lane: stateless `POST /run` calls that bring a document and take back the result",
+      "args": [
+        {
+          "defaults": [
+            "8080"
+          ],
+          "help": "Port to listen on",
+          "long": "port",
+          "name": "port",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "PORT"
+          ]
+        },
+        {
+          "defaults": [
+            "127.0.0.1"
+          ],
+          "help": "Address to bind. A container binds every address; local use, loopback",
+          "long": "bind",
+          "name": "bind",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "BIND"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for. Absent, the face the CLI bundles (Inter) stands in",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "No fallback face: text no registered family answers for is not set, and the run says so (to see what a document is missing)",
+          "long": "no-default-font",
+          "name": "no_default_font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "NO_DEFAULT_FONT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "engine-serve",
+      "subcommands": []
+    },
+    {
       "about": "The local library of documents `paged mcp` serves",
       "args": [
         {

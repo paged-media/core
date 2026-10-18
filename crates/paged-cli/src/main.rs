@@ -136,6 +136,9 @@ fn main() -> Result<()> {
             library.unwrap_or_else(paged_cli::library::DiskLibrary::default_root),
             assets,
         ),
+        Command::EngineServe { port, bind, assets } => {
+            paged_cli::engine_serve::run(port, &bind, assets)
+        }
         Command::Library { what, library } => {
             let root = library.unwrap_or_else(paged_cli::library::DiskLibrary::default_root);
             match what {
