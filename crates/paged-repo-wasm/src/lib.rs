@@ -190,6 +190,98 @@ impl Repository {
         Ok(json(&locs))
     }
 
+    /// What a push of `ref_name` offers a remote: every object its head reaches,
+    /// stopping at commits in `known` (JSON `[address]`: heads the remote has).
+    /// JSON `[{hash, kind}]`, kind being the pack tag.
+    pub fn offer(&self, ref_name: &str, known: &str) -> Result<String, JsError> {
+        let head = self
+            .repo
+            .head(ref_name)
+            .ok_or_else(|| JsError::new(&format!("no ref {ref_name}")))?;
+        let known: std::collections::BTreeSet<Hash> = serde_json::from_str::<Vec<String>>(known)
+            .map_err(|e| JsError::new(&e.to_string()))?
+            .iter()
+            .filter_map(|h| Hash::from_hex(h))
+            .filter(|h| self.repo.store.has(h))
+            .collect();
+        let offer =
+            paged_repo::reachable(&self.repo.store, &[head], |c| known.contains(c)).map_err(js)?;
+        let out: Vec<serde_json::Value> = offer
+            .into_iter()
+            .map(|(k, h)| serde_json::json!({ "hash": h.to_hex(), "kind": k.tag() }))
+            .collect();
+        Ok(json(&out))
+    }
+
+    /// Where the not-yet-held objects among `addresses` (JSON) are: hand them
+    /// over before `packOf`.
+    #[wasm_bindgen(js_name = locateMany)]
+    pub fn locate_many(&self, addresses: &str) -> Result<String, JsError> {
+        let list: Vec<String> =
+            serde_json::from_str(addresses).map_err(|e| JsError::new(&e.to_string()))?;
+        let locs: Vec<LocJs> = list
+            .iter()
+            .filter_map(|a| Hash::from_hex(a))
+            .filter(|h| !self.repo.store.holds(h))
+            .filter_map(|h| {
+                self.repo.store.locate(&h).map(|l| LocJs {
+                    hash: h.to_hex(),
+                    pack: l.pack,
+                    offset: l.offset as f64,
+                    len: l.len,
+                })
+            })
+            .collect();
+        Ok(json(&locs))
+    }
+
+    /// The objects `objects` names (JSON `[{hash, kind}]`) as one pack, to upload.
+    #[wasm_bindgen(js_name = packOf)]
+    pub fn pack_of(&self, objects: &str) -> Result<Vec<u8>, JsError> {
+        #[derive(serde::Deserialize)]
+        struct O {
+            hash: String,
+            kind: u8,
+        }
+        let list: Vec<O> =
+            serde_json::from_str(objects).map_err(|e| JsError::new(&e.to_string()))?;
+        let mut wanted = Vec::with_capacity(list.len());
+        for o in list {
+            let kind =
+                paged_repo::Kind::from_tag(o.kind).ok_or_else(|| JsError::new("bad kind"))?;
+            wanted.push((kind, hash(&o.hash)?));
+        }
+        paged_repo::pack_of(&self.repo.store, &wanted).map_err(js)
+    }
+
+    /// Takes a pulled pack and moves `ref_name` from `expected` (an address or
+    /// "") to `new` through this repository's own governance.
+    #[wasm_bindgen(js_name = receivePack)]
+    pub fn receive_pack(
+        &mut self,
+        pack: &[u8],
+        ref_name: &str,
+        expected: &str,
+        new: &str,
+        actor: &str,
+        ts: f64,
+    ) -> Result<(), JsError> {
+        let objects = paged_repo::read_records(pack)
+            .map_err(js)?
+            .into_iter()
+            .map(|(k, h, b)| (h, (k, b)))
+            .collect();
+        let expected = if expected.is_empty() {
+            None
+        } else {
+            Some(hash(expected)?)
+        };
+        let ctx = Ctx::human(actor, ts as i64);
+        self.repo
+            .receive(objects, ref_name, expected, Some(hash(new)?), &ctx, false)
+            .map_err(js)
+    }
+
     pub fn provide(&mut self, address: &str, bytes: Vec<u8>) -> Result<(), JsError> {
         self.repo.store.provide(hash(address)?, bytes).map_err(js)
     }
