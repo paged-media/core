@@ -959,6 +959,16 @@
       "rationale": "Added 2026-10-17 (ADRs 178, 179): footnote-split with frame 2 at 300 pt instead of 420, asked of InDesign 20.0.1. InDesign continues the split note exactly after the hyphenated 'ordi-' of its last kept line and recomposes the rest at 300 pt; the body text in frame 2 is set at 300 pt too. The engine continued the note by line count (losing what the wider composition no longer had) and set frame 2's body at 420 pt: mean 1.224 / p99 49.21 / ssim 0.944. With the continuation resumed at its text position and each frame's measure: 0.279 / 8.14 / 0.995, ink 3.93 (footnote-split itself measures 0.285); sized at worst * 1.20, ssim - 0.005, ink worst + ~20%. Text gate on."
     },
     {
+      "name": "footnote-keeps",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.226,
+      "max_p99_de": 6.96,
+      "min_ssim": 0.993,
+      "max_ink_mean_de": 4.22,
+      "rationale": "Added 2026-10-18 (C-45): a keep that moves a reference line on, asked of InDesign 20.0.1. The footnote-split page and frames; P2 carries note 1 and keeps with the next 2 lines, P3 keeps all its lines together (KeepLinesTogether + KeepAllLinesTogether) and does not fit under P2 in frame 1. InDesign moves P3 to frame 2 with P2's last line, sets note 1 at frame 2's foot with note 2, and keeps no room for it in frame 1; the engine does the same. Page measures mean 0.188, p99 5.79, ssim 0.99799, ink 3.51; sized at worst x 1.20, ssim - 0.005. Text gate on."
+    },
+    {
       "name": "footnote-split",
       "text_gate": true,
       "max_pages_with_pdf": 1,

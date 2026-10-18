@@ -221,6 +221,7 @@ pub const SAMPLES: &[&str] = &[
     "footnote-split",
     "footnote-nosplit",
     "footnote-split-narrow",
+    "footnote-keeps",
     "toc",
     "index",
     "xref",
@@ -307,6 +308,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "footnote-split" => footnote_split::build(&footnote_split::SPLIT),
         "footnote-nosplit" => footnote_split::build(&footnote_split::NOSPLIT),
         "footnote-split-narrow" => footnote_split::build(&footnote_split::SPLIT_NARROW),
+        "footnote-keeps" => footnote_split::build(&footnote_split::KEEPS),
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
         "gradient-geometry" => gradient_geometry::build(),
@@ -361,7 +363,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            101,
+            102,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
