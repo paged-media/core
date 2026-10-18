@@ -108,7 +108,7 @@ is not written yet.
 | [177](177-table-rows-fit-the-text-area.md) | A frame holds the table rows its text area holds, strokes included | Accepted 2026-10-17 |
 | [178](178-footnotes-grow-and-continue.md) | A growing story grows a page for its footnotes, and a note continues from where it stopped | Accepted 2026-10-17 |
 | [179](179-chain-frames-of-different-widths.md) | Each frame of a chain sets its lines at its own measure | Accepted 2026-10-17 |
-| [180](180-the-repository-is-the-document.md) | The repository is the document; a file is a projection | Proposed 2026-10-17 |
+| [180](180-the-repository-is-the-document.md) | The repository is the document; a file is a projection | Accepted 2026-10-18 |
 | [181](181-the-viewer-reads-paged-containers.md) | The viewer opens a `.paged` container from its model part, as the editor does | Accepted 2026-10-17 |
 | [182](182-tagged-pdf.md) | Create Tagged PDF: stories and paragraphs as InDesign tags them | Accepted 2026-10-18 |
 | [183](183-structural-export.md) | The IDML a save writes holds the document's structure as InDesign reads it | Accepted 2026-10-18 |

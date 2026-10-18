@@ -77,7 +77,7 @@ fn parts_of(file: &[u8]) -> BTreeMap<String, Vec<u8>> {
             let mut f = z.by_index(i).unwrap();
             let mut b = Vec::new();
             f.read_to_end(&mut b).unwrap();
-            (f.name().to_string(), b)
+            (f.name().unwrap().into_owned(), b)
         })
         .collect()
 }
@@ -122,10 +122,10 @@ fn a_projection_carries_every_part_byte_for_byte() {
     assert_eq!(parts_of(&out), parts_of(&file));
     let names: Vec<String> = {
         let z = ZipArchive::new(Cursor::new(&out)).unwrap();
-        z.file_names().map(String::from).collect()
+        z.file_names().map(|n| n.unwrap().into_owned()).collect()
     };
     let mut z = ZipArchive::new(Cursor::new(&out)).unwrap();
-    assert_eq!(z.by_index(0).unwrap().name(), "mimetype");
+    assert_eq!(z.by_index(0).unwrap().name().unwrap(), "mimetype");
     assert_eq!(
         z.by_index(0).unwrap().compression(),
         CompressionMethod::Stored

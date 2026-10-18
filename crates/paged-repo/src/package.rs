@@ -116,7 +116,7 @@ pub fn import(file: &[u8], name: &str) -> Result<Snapshot, Error> {
         if f.is_dir() {
             continue;
         }
-        let path = f.name().to_string();
+        let path = f.name().map_err(pkg)?.into_owned();
         let mut bytes = Vec::new();
         (&mut f)
             .take(MAX_UNPACKED - total + 1)

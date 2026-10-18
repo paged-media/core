@@ -1,6 +1,6 @@
 # ADR 180 — The repository is the document; a file is a projection
 
-- **Status:** Proposed 2026-10-17.
+- **Status:** Accepted 2026-10-18.
 - **Scope:**
   - New crate `paged-repo`: content-addressed objects (blob, chunk list, tree, commit), refs,
     a hash-chained evidence log, the governance checks every backend shares, sync
