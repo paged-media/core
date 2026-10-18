@@ -1,0 +1,30 @@
+{
+ "with_fonts_xml": {
+  "stories": [
+   [
+    "Minion Pro\tRegular",
+    "INSTALLED"
+   ]
+  ],
+  "fonts": [
+   [
+    "Minion Pro\tRegularRegular",
+    "INSTALLED"
+   ]
+  ]
+ },
+ "fonts_xml_emptied": {
+  "stories": [
+   [
+    "Minion Pro\tRegular",
+    "INSTALLED"
+   ]
+  ],
+  "fonts": [
+   [
+    "Minion Pro\tRegularRegular",
+    "INSTALLED"
+   ]
+  ]
+ }
+}

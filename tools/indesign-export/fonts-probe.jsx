@@ -20,7 +20,7 @@
 // PDF to PROBE_PDF.
 (function () {
     app.scriptPreferences.userInteractionLevel = UserInteractionLevels.NEVER_INTERACT;
-    function q(s) { return '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'; }
+    function q(s) { return '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\t/g, "\\t") + '"'; }
     var doc = app.open(File($.global.PROBE_IN), true);
     try {
         doc.recompose();
