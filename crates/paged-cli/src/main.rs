@@ -132,5 +132,18 @@ fn main() -> Result<()> {
             assets,
         } => paged_cli::inspect::digest(&doc, &assets, compact),
         Command::Session => paged_cli::session::run(),
+        Command::Mcp { library, assets } => paged_cli::mcp::run(
+            library.unwrap_or_else(paged_cli::library::DiskLibrary::default_root),
+            assets,
+        ),
+        Command::Library { what, library } => {
+            let root = library.unwrap_or_else(paged_cli::library::DiskLibrary::default_root);
+            match what {
+                paged_cli::cli::LibraryCommand::Import { file, name } => {
+                    paged_cli::library::import_cmd(&root, &file, name.as_deref())
+                }
+                paged_cli::cli::LibraryCommand::List => paged_cli::library::list_cmd(&root),
+            }
+        }
     }
 }

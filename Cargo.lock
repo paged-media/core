@@ -2651,6 +2651,7 @@ name = "paged-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "idml-import",
  "image",
@@ -2660,8 +2661,10 @@ dependencies = [
  "paged-fidelity",
  "paged-gen",
  "paged-introspect",
+ "paged-mcp",
  "paged-model",
  "paged-mutate",
+ "paged-repo",
  "paged-script",
  "paged-wire",
  "serde",

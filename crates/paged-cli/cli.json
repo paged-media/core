@@ -5244,6 +5244,164 @@
       "longAbout": "Speak the headless NDJSON engine protocol on stdin/stdout.\n\nByte-for-byte the `paged-run` protocol, from the same code: a greeting line, then one JSON response per JSON request, in order. Hosts that already spawn `paged-run` need not change.",
       "name": "session",
       "subcommands": []
+    },
+    {
+      "about": "Serve the paged MCP tools over stdio, for Claude Desktop or Claude Code: the library's documents, and the engine run here",
+      "args": [
+        {
+          "defaults": [],
+          "help": "The library directory. Default: `$PAGED_LIBRARY`, else `~/.paged/library`",
+          "long": "library",
+          "name": "library",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "LIBRARY"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for. Absent, the face the CLI bundles (Inter) stands in",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "No fallback face: text no registered family answers for is not set, and the run says so (to see what a document is missing)",
+          "long": "no-default-font",
+          "name": "no_default_font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "NO_DEFAULT_FONT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "mcp",
+      "subcommands": []
+    },
+    {
+      "about": "The local library of documents `paged mcp` serves",
+      "args": [
+        {
+          "defaults": [],
+          "help": "The library directory. Default: `$PAGED_LIBRARY`, else `~/.paged/library`",
+          "long": "library",
+          "name": "library",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "LIBRARY"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "library",
+      "subcommands": [
+        {
+          "about": "Open a file into the library as a new document",
+          "args": [
+            {
+              "defaults": [],
+              "help": "The `.idml` or `.paged` file to open",
+              "long": null,
+              "name": "file",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "The document's name. Default: the file's name",
+              "long": "name",
+              "name": "name",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "import",
+          "subcommands": []
+        },
+        {
+          "about": "The library's documents and their heads",
+          "args": [],
+          "longAbout": null,
+          "name": "list",
+          "subcommands": []
+        }
+      ]
     }
   ],
   "protocol": 71

@@ -43,6 +43,10 @@ paged-gen = { path = "../paged-gen" }
 # load that has to be told about it. Same rev as paged-canvas pins.
 idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "63346fd13766fcc03d4468c027996709c0fd088c" }
 clap = { version = "4", features = ["derive"] }
+# `paged mcp` and `paged library`: the repository (ADR 180) and the MCP surface.
+paged-repo = { path = "../paged-repo" }
+paged-mcp = { path = "../paged-mcp" }
+base64 = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
 anyhow = { workspace = true }

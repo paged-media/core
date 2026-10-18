@@ -29,6 +29,8 @@ pub mod export;
 pub mod gen;
 pub mod inspect;
 pub mod invoke;
+pub mod library;
+pub mod mcp;
 pub mod new;
 pub mod object;
 pub mod options;

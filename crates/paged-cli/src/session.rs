@@ -617,3 +617,27 @@ fn resolve_page(model: &paged_canvas::CanvasModel, page: &Value) -> Result<PageI
         )),
     }
 }
+
+/// The session protocol for another host in this process (`paged mcp`): the
+/// same requests through the same engine door, without stdio.
+pub struct EngineSession {
+    live: Live,
+}
+
+impl EngineSession {
+    /// A session whose loads use `assets` (fonts, colour profile).
+    pub fn new(assets: DocumentOptions) -> EngineSession {
+        EngineSession {
+            live: Live {
+                pending: assets,
+                ..Live::default()
+            },
+        }
+    }
+
+    /// One request, as the NDJSON protocol spells it (`{"cmd": …}`).
+    pub fn request(&mut self, req: Value) -> Result<Value> {
+        let req: Request = serde_json::from_value(req).context("not a session request")?;
+        handle(&mut self.live, req)
+    }
+}

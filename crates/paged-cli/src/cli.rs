@@ -294,6 +294,37 @@ pub enum Command {
     /// greeting line, then one JSON response per JSON request, in
     /// order. Hosts that already spawn `paged-run` need not change.
     Session,
+    /// Serve the paged MCP tools over stdio, for Claude Desktop or Claude
+    /// Code: the library's documents, and the engine run here.
+    Mcp {
+        /// The library directory. Default: `$PAGED_LIBRARY`, else `~/.paged/library`.
+        #[arg(long)]
+        library: Option<PathBuf>,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
+    /// The local library of documents `paged mcp` serves.
+    Library {
+        #[command(subcommand)]
+        what: LibraryCommand,
+        /// The library directory. Default: `$PAGED_LIBRARY`, else `~/.paged/library`.
+        #[arg(long, global = true)]
+        library: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum LibraryCommand {
+    /// Open a file into the library as a new document.
+    Import {
+        /// The `.idml` or `.paged` file to open.
+        file: PathBuf,
+        /// The document's name. Default: the file's name.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// The library's documents and their heads.
+    List,
 }
 
 #[derive(Debug, clap::Subcommand)]
