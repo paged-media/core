@@ -2207,56 +2207,17 @@ impl CanvasModel {
         // The raw source archive rides on the CanvasModel (below), not on the
         // scene `Document` — the model no longer carries the IDML archive (N9).
         let (scene, source_archive) = {
-            let container = idml_import::open_source_archive(bytes)
-                .map_err(|e| LoadError::Parse(e.to_string()))?;
-            match container
-                .entry(paged_store::DOCUMENT_PGM_PATH)
-                .map(|b| b.to_vec())
-            {
-                // A native part that reconstructs wins; one that is absent OR
-                // incompatible (stale/foreign PGM_FORMAT_VERSION → `from_bytes`
-                // returns None) falls back to the IDML import — a stale `.pgm`
-                // is never a hard load error (ADR-022 Q2).
-                // The model part names its images; their bytes are the
-                // container's blob parts (a part written before blobs
-                // carries them inline, and needs none).
-                Some(pgm) => match paged_store::from_parts(
-                    &pgm,
-                    container
-                        .entries
-                        .iter()
-                        .filter_map(|(path, bytes)| {
-                            paged_store::blob_name_of(path)
-                                .map(|name| (name.to_string(), bytes.to_vec()))
-                        })
-                        .collect(),
-                ) {
-                    // The native part is the model truth (including its
-                    // structured designmap); keep the real source archive
-                    // (raw carry-through bytes) beside it so the parts door still
-                    // serves every other container part and IDML export can
-                    // still carry through.
-                    Some(mut doc) => {
-                        adopt_style_leading(&mut doc, &container);
-                        // The IDML parts beside the model keep each next /
-                        // previous page number in a range of its own; cut
-                        // the model's runs the same way, or the next export
-                        // patching those parts writes such a run twice.
-                        idml_export::cut_page_number_runs(&mut doc);
-                        (doc, Some(container))
-                    }
-                    None => (
-                        idml_import::import_idml_archive(&container)
-                            .map_err(|e| LoadError::Parse(e.to_string()))?,
-                        Some(container),
-                    ),
-                },
-                None => (
-                    idml_import::import_idml_archive(&container)
-                        .map_err(|e| LoadError::Parse(e.to_string()))?,
-                    Some(container),
-                ),
+            let opened =
+                paged_renderer::container::open_document(bytes).map_err(LoadError::Parse)?;
+            let mut doc = opened.document;
+            if opened.from_model_part {
+                // The IDML parts beside the model keep each next /
+                // previous page number in a range of its own; cut the
+                // model's runs the same way, or the next export patching
+                // those parts writes such a run twice.
+                idml_export::cut_page_number_runs(&mut doc);
             }
+            (doc, Some(opened.archive))
         };
         phase_log("CanvasModel::load parse", t_parse);
 
@@ -13362,33 +13323,6 @@ pub fn font_postscript_name(bytes: &[u8]) -> Option<String> {
         .into_iter()
         .filter(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
         .find_map(|n| n.to_string())
-}
-
-/// A native model part written before styles modelled their leading
-/// (every `.paged` up to 2026-09-05) carries `leading: None` on every
-/// style, while the package's own `Resources/Styles.xml` still spells
-/// it (`<Properties><Leading type="unit">13</Leading>`). Adopt the
-/// stylesheet's leading for every paragraph / character style that
-/// has none, so a document reopened from such a part composes the way
-/// InDesign composes its IDML — and the way a fresh import would.
-/// A part whose styles already carry leading is left alone.
-fn adopt_style_leading(doc: &mut Document, container: &idml_import::SourceArchive) {
-    let Some(bytes) = container.entry("Resources/Styles.xml") else {
-        return;
-    };
-    let Ok(sheet) = idml_import::styles::parse_stylesheet(bytes) else {
-        return;
-    };
-    for (id, style) in doc.styles.paragraph_styles.iter_mut() {
-        if style.leading.is_none() {
-            style.leading = sheet.paragraph_styles.get(id).and_then(|s| s.leading);
-        }
-    }
-    for (id, style) in doc.styles.character_styles.iter_mut() {
-        if style.leading.is_none() {
-            style.leading = sheet.character_styles.get(id).and_then(|s| s.leading);
-        }
-    }
 }
 
 /// The faces the worker registered bytes for, one per NAMED INSTANCE

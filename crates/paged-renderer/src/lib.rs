@@ -18,6 +18,7 @@
 //! GPU raster. Mirrors the TypeScript surface described in idea.md §14.
 
 pub mod asset;
+pub mod container;
 pub mod diagnostics;
 pub mod flow;
 pub mod pipeline;
