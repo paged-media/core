@@ -1486,6 +1486,23 @@ pub struct GlyphRunEntry {
 pub struct StructKey {
     pub story: u32,
     pub paragraph: u32,
+    /// Which paragraph of a model paragraph that holds several (its text
+    /// split at paragraph marks): InDesign sets each as its own element.
+    pub sub: u32,
+    /// A table cell's paragraph in the table that paragraph holds (ADR 182
+    /// amended): a tagged PDF sets it as `Table` > `TR` > `TH`/`TD` > `P`
+    /// under the paragraph's element. `None` for the paragraph's own text.
+    pub cell: Option<CellKey>,
+}
+
+/// Where a table cell's paragraph stands: its row and column, the
+/// paragraph's index in the cell, and whether the row is a header row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CellKey {
+    pub row: u32,
+    pub col: u32,
+    pub paragraph: u32,
+    pub header: bool,
 }
 
 /// Concept 3 — the per-list glyph capture (see [`GlyphRunEntry`]).

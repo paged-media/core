@@ -4657,6 +4657,10 @@ pub(super) struct StoryEmitter<'a> {
     /// The story's ordinal in document order, its tagged-PDF structure
     /// key's first half (ADR 182).
     pub(super) story_ordinal: u32,
+    /// ADR 182 — the paragraph of the current model paragraph being
+    /// emitted, counted from 0 at each paragraph mark the model paragraph
+    /// holds (its segments).
+    pub(super) struct_sub: u32,
     /// Track 2: monotonically incremented as `emit_paragraph` fires.
     /// Resets to 0 per emitter (i.e. per story).
     pub(super) paragraph_idx: u32,
@@ -4941,6 +4945,7 @@ impl<'a> StoryEmitter<'a> {
             breaks: Vec::new(),
             current_story_id: String::new(),
             story_ordinal: 0,
+            struct_sub: 0,
             paragraph_idx: 0,
             diagnostics: Vec::new(),
             overset_reported: false,
@@ -5033,11 +5038,30 @@ impl<'a> StoryEmitter<'a> {
     /// ADR 182 — the paragraph the next glyphs belong to, for a tagged
     /// PDF's structure; set on `list`'s glyph capture (a no-op when the
     /// build captures none) and cleared with `None`.
+    /// ADR 182 — a table cell's paragraph in the paragraph being emitted:
+    /// its glyphs carry the cell as well (`None` clears the capture).
+    pub(super) fn tag_cell_glyphs(
+        &self,
+        list: &mut DisplayList,
+        cell: Option<paged_compose::CellKey>,
+    ) {
+        if let Some(runs) = list.glyph_runs.as_mut() {
+            runs.current = cell.map(|cell| paged_compose::StructKey {
+                story: self.story_ordinal,
+                paragraph: self.paragraph_idx,
+                sub: self.struct_sub,
+                cell: Some(cell),
+            });
+        }
+    }
+
     pub(super) fn tag_glyphs(&self, list: &mut DisplayList, on: bool) {
         if let Some(runs) = list.glyph_runs.as_mut() {
             runs.current = on.then_some(paged_compose::StructKey {
                 story: self.story_ordinal,
                 paragraph: self.paragraph_idx,
+                sub: self.struct_sub,
+                cell: None,
             });
         }
     }
@@ -6428,7 +6452,14 @@ fn emit_paragraph_lines(
         // The paragraph is still to be counted: its opening piece was empty.
         let mut uncounted = false;
         em.in_segments = true;
-        for seg in split_paragraph_into_segments(paragraph) {
+        em.struct_sub = 0;
+        for (k, seg) in split_paragraph_into_segments(paragraph)
+            .into_iter()
+            .enumerate()
+        {
+            if k > 0 && seg.opens_paragraph {
+                em.struct_sub += 1;
+            }
             let counts_paragraph = seg.opens_paragraph || uncounted;
             em.segment = SegmentState {
                 opens_paragraph: seg.opens_paragraph,
@@ -6445,6 +6476,7 @@ fn emit_paragraph_lines(
         }
         em.segment = SegmentState::default();
         em.in_segments = false;
+        em.struct_sub = 0;
         return;
     }
 

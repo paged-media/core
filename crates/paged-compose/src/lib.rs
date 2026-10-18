@@ -33,9 +33,9 @@ pub mod stroke_marks;
 pub mod text;
 
 pub use display_list::{
-    BevelDirection, BevelEmboss, BevelStyle, BevelTechnique, BlendMode, Color, DashPattern,
-    DecodedImage, DirectionalFeather, DisplayCommand, DisplayList, DropShadow, Feather,
-    FeatherCornerType, GlyphCacheKey, GlyphRunEntry, GlyphRunTable, GradientFeather,
+    BevelDirection, BevelEmboss, BevelStyle, BevelTechnique, BlendMode, CellKey, Color,
+    DashPattern, DecodedImage, DirectionalFeather, DisplayCommand, DisplayList, DropShadow,
+    Feather, FeatherCornerType, GlyphCacheKey, GlyphRunEntry, GlyphRunTable, GradientFeather,
     GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, ImageId, InnerGlow,
     InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, LinkRegion, LinkRegionTable,
     LinkTarget, OuterGlow, Paint, PathBuffer, PathData, PathId, PathSegment, RadialGradient, Rect,
