@@ -939,6 +939,26 @@
       "rationale": "Added 2026-10-15 (L-01d, ADR 160): where InDesign sets the footnotes of a frame with columns, asked of InDesign 20.0.1. One A4 page of Inter 10 pt, notes 8 pt: frame A (two columns, six paragraphs, the fourth starting the second column) and frame B (two columns, four paragraphs) below it, which overrides the document's footnote layout with FootnotesEnableOverrides. InDesign sets a frame's notes under each column at the column's width, or, when they span, across the whole frame in reference order under one rule; an override with no spacing of its own puts InDesign's frame default of 6 pt between notes. This variant: the document spans (EnableStraddling true), frame B does not. Page measures mean 0.153, p99 3.43, ssim 0.99426, ink 7.00 (main's engine: 0.672 / 0.957); sized at worst x 1.20, ssim - 0.005. Every note line lies within 0.05 pt of InDesign's; the rest is glyph edges. Text gate on."
     },
     {
+      "name": "chain-widths",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 0.165,
+      "max_p99_de": 4.71,
+      "min_ssim": 0.9932,
+      "max_ink_mean_de": 4.06,
+      "rationale": "Added 2026-10-17 (ADR 179): a story threaded through frames of different widths, asked of InDesign 20.0.1. Page 1: frames of 400, 250 and 400 pt, one under the other, Inter 10/12 pt; the first paragraph runs from the wide frame into the narrow one, the second from the narrow one into the wide one, the third starts in the last. Page 2: frames of 250 and 400 pt, one paragraph across them. InDesign keeps a frame's lines and sets the rest of the paragraph at the next frame's measure from the line that moves there. The engine set every line of the story at the head frame's measure: p1 mean 1.497 / p99 66.94 / ssim 0.919, p2 0.530 / 11.32 / 0.972. With each region's measure and per-line measures across the boundary: p1 0.137 / 3.92 / 0.9982, p2 0.065 / 1.78 / 0.999, ink 3.38; sized at worst * 1.20, ssim - 0.005, ink worst + ~20%. The text gate is hard: 35 lines on 2 pages match."
+    },
+    {
+      "name": "footnote-split-narrow",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.335,
+      "max_p99_de": 9.77,
+      "min_ssim": 0.99,
+      "max_ink_mean_de": 4.72,
+      "rationale": "Added 2026-10-17 (ADRs 178, 179): footnote-split with frame 2 at 300 pt instead of 420, asked of InDesign 20.0.1. InDesign continues the split note exactly after the hyphenated 'ordi-' of its last kept line and recomposes the rest at 300 pt; the body text in frame 2 is set at 300 pt too. The engine continued the note by line count (losing what the wider composition no longer had) and set frame 2's body at 420 pt: mean 1.224 / p99 49.21 / ssim 0.944. With the continuation resumed at its text position and each frame's measure: 0.279 / 8.14 / 0.995, ink 3.93 (footnote-split itself measures 0.285); sized at worst * 1.20, ssim - 0.005, ink worst + ~20%. Text gate on."
+    },
+    {
       "name": "footnote-split",
       "text_gate": true,
       "max_pages_with_pdf": 1,

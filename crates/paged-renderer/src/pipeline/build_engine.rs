@@ -4282,6 +4282,7 @@ pub(super) fn capture_footnotes(
             first_line: 0,
             end_line: None,
             continued: false,
+            resume_at: None,
             ref_baseline_pt,
         });
     }
@@ -5067,6 +5068,75 @@ impl<'a> StoryEmitter<'a> {
     /// `i`'s text bottom so the footnote pool drawn underneath does
     /// not overlap the body. A shorter/empty slice is padded with
     /// zeros; entries past the chain length are ignored.
+    /// The measure of chain region `k` (ADR 179): the span plan's when
+    /// there is one, the head region's column width (its wrap shrink
+    /// included) for the first, else the region's own inner width. A
+    /// story threads frames of different widths, and InDesign sets each
+    /// frame's lines at its own measure (`chain-widths`).
+    pub(super) fn region_measure_pt(&self, k: usize) -> Option<f32> {
+        if let Some(&w) = self.region_widths.get(k) {
+            return Some(w);
+        }
+        if k == 0 || self.options.fallback_column_width_pt.is_some() {
+            return self.column_width_pt;
+        }
+        let f = self.chain.get(k)?;
+        let [_, left, _, right] = f.inset_spacing.unwrap_or([0.0; 4]);
+        Some((f.bounds.width() - left - right).max(0.0))
+    }
+
+    /// ADR 179 — per-line measures for a paragraph that may run on into
+    /// regions of other widths: as many lines as its current region holds
+    /// below the first baseline (above the text area's bottom and its
+    /// footnote reservation) at that region's measure, then each next
+    /// region's lines at its own. InDesign keeps a frame's lines and sets
+    /// the rest of the paragraph at the next frame's measure from the
+    /// line that moves there (`chain-widths`). `None` when every region
+    /// from here on has the current measure: the scalar width serves.
+    pub(super) fn chain_line_measures(
+        &self,
+        lopts: &paged_text::LayoutOptions,
+        indents_pt: f32,
+        paragraph_size: f32,
+    ) -> Option<Vec<i32>> {
+        let here = self.region_measure_pt(self.frame_idx)?;
+        if (self.frame_idx..self.chain.len())
+            .filter_map(|k| self.region_measure_pt(k))
+            .all(|w| (w - here).abs() < 0.25)
+        {
+            return None;
+        }
+        let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+        let leading = lopts.leading_override.unwrap_or(lopts.line_height).max(1);
+        let mut widths: Vec<i32> = Vec::new();
+        for k in self.frame_idx..self.chain.len() {
+            let frame = self.chain[k];
+            let bottom = to_64(frame.bounds.height() - inset_bottom(frame))
+                - self.reserved_footnote_64.get(k).copied().unwrap_or(0);
+            // The current region's lines start at the paragraph's first
+            // baseline; a next region's about its first line's ascent
+            // below its top inset (a prediction: only the lines past it
+            // depend on it).
+            let first = if k == self.frame_idx {
+                lopts.first_baseline
+            } else {
+                to_64(frame.inset_spacing.map_or(0.0, |i| i[0]) + paragraph_size * 0.8)
+            };
+            let lines = if first > bottom {
+                0
+            } else {
+                ((bottom - first) / leading + 1) as usize
+            };
+            let measure = to_64((self.region_measure_pt(k)? - indents_pt).max(1.0));
+            widths.extend(std::iter::repeat_n(measure, lines.min(512)));
+            if widths.len() >= 512 {
+                break;
+            }
+        }
+        // Past the chain the composer repeats the last entry.
+        (!widths.is_empty()).then_some(widths)
+    }
+
     pub(super) fn with_footnote_reservation(mut self, reserved: &[i32]) -> Self {
         for (slot, &r) in self.reserved_footnote_64.iter_mut().zip(reserved.iter()) {
             *slot = r.max(0);
@@ -6957,12 +7027,7 @@ fn emit_paragraph_lines(
         .get(head_run)
         .map(|r| r.point_size)
         .unwrap_or(12.0);
-    let Some(full_col_pt) = em
-        .region_widths
-        .get(em.frame_idx)
-        .copied()
-        .or(em.column_width_pt)
-    else {
+    let Some(full_col_pt) = em.region_measure_pt(em.frame_idx) else {
         return;
     };
     // FINDING #7.2 — LeftIndent / RightIndent narrow the composed
@@ -7335,6 +7400,12 @@ fn emit_paragraph_lines(
         no_room: plan_no_room,
         first_baseline_push_pt,
     } = build_perline_wrap_widths(em, styled_runs_ref, &mut lopts, frame_first_paragraph);
+    // ADR 179 — a chain of frames of different widths, which the wrap
+    // plan leaves to the scalar measure.
+    if lopts.compose.column_widths.is_none() {
+        lopts.compose.column_widths =
+            em.chain_line_measures(&lopts, left_indent_pt + right_indent_pt, paragraph_size);
+    }
 
     // A shaped frame whose top is too narrow to start on moves its
     // first baseline down; the widths above were already built from

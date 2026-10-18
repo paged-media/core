@@ -79,6 +79,10 @@ pub(super) struct ComposedFootnote {
     /// emit pass can build a per-cluster paint picker (per-run
     /// `FillColor`/tint) matching the styled-run text.
     resolved_runs_per_para: Vec<Vec<paged_scene::ResolvedRunAttrs>>,
+    /// Per paragraph, its segment's index in the note and the byte of
+    /// that segment's shaped text its own text starts at (non-zero only
+    /// where a continued note resumes): [`ComposedFootnote::resume_point`].
+    origins: Vec<(u32, u32)>,
     /// Per-run SHAPED text byte lengths (marker folded onto run 0 of
     /// paragraph 0), parallel to `resolved_runs_per_para`. Drives the
     /// paint picker's band offsets.
@@ -136,15 +140,31 @@ pub(super) fn compose_footnote_paragraphs(
     // The paragraph before's `SpaceAfter`, counted when another follows.
     let mut space_after_pt = 0.0f32;
     let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+    let mut origins: Vec<(u32, u32)> = Vec::new();
+    // A continued note resumes mid-text (ADR 178): the segments before
+    // its resume point are set in earlier areas, and the one it resumes
+    // in drops the bytes set there.
+    let (resume_segment, resume_byte) = fn_.resume_at.unwrap_or((0, 0));
+    let mut segment_no = 0u32;
 
     for source in &fn_.paragraphs {
         // A footnote paragraph takes its nested styles as a body one does,
         // over the whole paragraph before it is split.
         let source = &*super::with_nested_styles(document, source);
         for segment in super::geom::split_paragraph_into_segments(source) {
+            let this_segment = segment_no;
+            segment_no += 1;
+            if this_segment < resume_segment {
+                continue;
+            }
+            let skip_bytes = if this_segment == resume_segment {
+                resume_byte as usize
+            } else {
+                0
+            };
             let para = &segment.paragraph;
             let resolved_paragraph = SegmentState {
-                opens_paragraph: segment.opens_paragraph,
+                opens_paragraph: segment.opens_paragraph && skip_bytes == 0,
                 closes_paragraph: segment.closes_paragraph,
                 ..SegmentState::default()
             }
@@ -236,6 +256,30 @@ pub(super) fn compose_footnote_paragraphs(
                     text
                 })
                 .collect();
+            // Resuming: drop what earlier areas set — whole runs, then the
+            // run the resume point falls in up to it. Every run keeps its
+            // slot (an emptied run shapes nothing), so the per-run attrs
+            // and faces stay aligned.
+            let mut run_texts = run_texts;
+            if skip_bytes > 0 {
+                let mut left = skip_bytes;
+                for t in run_texts.iter_mut() {
+                    let cut = left.min(t.len());
+                    let cut = (0..=cut)
+                        .rev()
+                        .find(|&i| t.is_char_boundary(i))
+                        .unwrap_or(0);
+                    t.drain(..cut);
+                    left -= cut;
+                    if left == 0 {
+                        break;
+                    }
+                }
+                number_spans.retain(|(r, _, _)| r.start >= skip_bytes);
+                for (r, _, _) in number_spans.iter_mut() {
+                    *r = r.start - skip_bytes..r.end - skip_bytes;
+                }
+            }
             let run_text_lens: Vec<usize> = run_texts.iter().map(|t| t.len()).collect();
             let text = run_texts.concat();
 
@@ -286,7 +330,12 @@ pub(super) fn compose_footnote_paragraphs(
             let paragraph_size = styled_runs[0].point_size;
             let left_indent_pt = resolved_paragraph.left_indent.unwrap_or(0.0).max(0.0);
             let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
-            let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
+            // A resumed paragraph's first line is not its first line.
+            let first_line_indent_pt = if skip_bytes > 0 {
+                0.0
+            } else {
+                resolved_paragraph.first_line_indent.unwrap_or(0.0)
+            };
             let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
             let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
             (lopts.alignment, lopts.last_line_alignment) =
@@ -390,6 +439,7 @@ pub(super) fn compose_footnote_paragraphs(
             leadings.push(line_leadings);
             resolved_runs_per_para.push(resolved_runs);
             run_text_lens_per_para.push(run_text_lens);
+            origins.push((this_segment, skip_bytes as u32));
         }
     }
 
@@ -405,6 +455,7 @@ pub(super) fn compose_footnote_paragraphs(
         font_outline_bytes,
         resolved_runs_per_para,
         run_text_lens_per_para,
+        origins,
     })
 }
 
@@ -467,6 +518,25 @@ impl ComposedFootnote {
     /// How far each of the note's lines, counted over all its
     /// paragraphs, moves the area down: its leading, and at a paragraph's
     /// first line the space above it.
+    /// Where the note's text resumes after its first `kept` lines (as
+    /// [`Self::line_advances`] counts them): the segment and the byte of
+    /// its shaped text the next line starts at. `None` past the last line.
+    fn resume_point(&self, kept: usize) -> Option<(u32, u32)> {
+        let mut k = kept;
+        for (p, leadings) in self.leadings.iter().enumerate() {
+            if k < leadings.len() {
+                let (segment, base) = self.origins[p];
+                let start = self.paragraphs[p]
+                    .lines
+                    .get(k)
+                    .map_or(0, |l| l.byte_range.start as u32);
+                return Some((segment, base + start));
+            }
+            k -= leadings.len();
+        }
+        None
+    }
+
     fn line_advances(&self) -> Vec<f32> {
         let mut out = Vec::new();
         for (p_idx, leadings) in self.leadings.iter().enumerate() {
@@ -1212,8 +1282,18 @@ pub(super) struct FootnoteSplit {
     page: usize,
     index: usize,
     kept: u32,
+    /// Where the continuation's text resumes ([`EmittedFootnote::resume_at`]).
+    resume_at: Option<(u32, u32)>,
     to: usize,
     to_page: usize,
+}
+
+/// A note split in one area, waiting for the next area to continue in.
+struct PendingSplit {
+    page: usize,
+    index: usize,
+    kept: u32,
+    resume_at: Option<(u32, u32)>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1267,14 +1347,18 @@ pub(super) fn plan_footnote_flow(
     let no_splitting = document.designmap.footnote_options.no_splitting == Some(true);
     // The lines a split note carries into the next area, and where it is.
     let mut carry: Vec<f32> = Vec::new();
-    let mut pending: Option<(usize, usize, u32)> = None;
+    let mut pending: Option<PendingSplit> = None;
+    // The split note's continuation, composed again at the next area's
+    // width (ADR 178): its lines there, not the ones it would have had.
+    let mut continuation: Option<EmittedFootnote> = None;
     for area in &areas {
         let page = &pages[area.page];
-        if let Some((from_page, index, kept)) = pending.take() {
+        if let Some(p) = pending.take() {
             flow.splits.push(FootnoteSplit {
-                page: from_page,
-                index,
-                kept,
+                page: p.page,
+                index: p.index,
+                kept: p.kept,
+                resume_at: p.resume_at,
                 to: area.frames[0],
                 to_page: area.page,
             });
@@ -1287,6 +1371,19 @@ pub(super) fn plan_footnote_flow(
             color_ctx,
             FOOTNOTE_POINT_SIZE,
         );
+        if let Some(cont) = continuation.take() {
+            if let Some(c) = compose_footnote_paragraphs(
+                &cont,
+                document,
+                font_table,
+                hyphenators,
+                page.binding_edge(),
+                area.rect.w,
+                metrics.default_size,
+            ) {
+                carry = c.line_advances();
+            }
+        }
         let mut notes: Vec<(usize, &EmittedFootnote)> = page
             .footnotes
             .iter()
@@ -1356,7 +1453,20 @@ pub(super) fn plan_footnote_flow(
                 room = Some(bottom - note.ref_baseline_pt);
                 if kept < advances.len() {
                     carry = advances[kept..].to_vec();
-                    pending = Some((area.page, index, kept as u32));
+                    let resume_at = c.resume_point(kept);
+                    pending = Some(PendingSplit {
+                        page: area.page,
+                        index,
+                        kept: kept as u32,
+                        resume_at,
+                    });
+                    continuation = resume_at.map(|at| EmittedFootnote {
+                        first_line: 0,
+                        end_line: None,
+                        continued: true,
+                        resume_at: Some(at),
+                        ..note.clone()
+                    });
                 }
             }
             break;
@@ -1398,13 +1508,18 @@ pub(super) fn apply_footnote_flow(
         let origin = pages[s.to_page].spread_origin;
         let host = frame_content_rect(frame, origin);
         let pool = footnote_pool_rect(chain, s.to, origin, document);
+        // The continuation resumes at the text position the kept lines
+        // end at, composed afresh at its own area's width (ADR 178); a
+        // split with no position (none was found) keeps counting lines.
+        let first_line = if s.resume_at.is_some() { 0 } else { s.kept };
         pages[s.to_page].footnotes.push(EmittedFootnote {
             host_frame_rect_pt: host,
             pool_rect_pt: pool,
             frame_footnotes: frame.footnotes,
-            first_line: s.kept,
+            first_line,
             end_line: None,
             continued: true,
+            resume_at: s.resume_at,
             // It heads the area: no reference of its own holds it down.
             ref_baseline_pt: pool.y,
             ..note

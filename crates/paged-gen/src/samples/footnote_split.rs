@@ -55,16 +55,28 @@ const DOM_VERSION: (&str, &str) = ("DOMVersion", "20.0");
 pub struct Variant {
     pub sample: &'static str,
     pub no_splitting: bool,
+    /// Frame 2's width: [`FRAME_W`], or narrower to ask where a note's
+    /// continuation goes when the next frame sets it at another measure.
+    pub frame_2_w: f32,
 }
 
 pub const SPLIT: Variant = Variant {
     sample: "footnote-split",
     no_splitting: false,
+    frame_2_w: FRAME_W,
 };
 
 pub const NOSPLIT: Variant = Variant {
     sample: "footnote-nosplit",
     no_splitting: true,
+    frame_2_w: FRAME_W,
+};
+
+/// The split note continues in a frame 300 pt wide (ADR 178).
+pub const SPLIT_NARROW: Variant = Variant {
+    sample: "footnote-split-narrow",
+    no_splitting: false,
+    frame_2_w: 300.0,
 };
 
 /// Numbered sentences, so every line reads differently in the PDF.
@@ -187,13 +199,13 @@ fn preferences_xml(v: &Variant) -> Vec<u8> {
 fn frame(
     id: String,
     story: String,
-    at: (f32, f32, f32),
+    (at, width_pt): ((f32, f32, f32), f32),
     prev: Option<String>,
     next: Option<String>,
 ) -> PageItem {
     Rect {
         self_id: id,
-        width_pt: FRAME_W,
+        width_pt,
         height_pt: at.2,
         item_transform: translate(at.0, at.1),
         fill_color: None,
@@ -225,8 +237,14 @@ pub fn build(v: &Variant) -> Sample {
     let f1 = self_id(s, "Frame", 1);
     let f2 = self_id(s, "Frame", 2);
     let items = vec![
-        frame(f1.clone(), story_id(s), FRAME_1, None, Some(f2.clone())),
-        frame(f2, story_id(s), FRAME_2, Some(f1), None),
+        frame(
+            f1.clone(),
+            story_id(s),
+            (FRAME_1, FRAME_W),
+            None,
+            Some(f2.clone()),
+        ),
+        frame(f2, story_id(s), (FRAME_2, v.frame_2_w), Some(f1), None),
     ];
     let master_id = self_id(s, "MasterSpread", 0);
     let spread_id = self_id(s, "Spread", 0);

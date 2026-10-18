@@ -1,0 +1,1 @@
+{  "bodyFits": {"pages": 1, "bodyEndPage": "1", "storyOverset": false, "noteEndPage": "1"},  "noteSplits": {"pages": 1, "bodyEndPage": "1", "storyOverset": false, "noteEndPage": "overset"},  "noteNoSplit": {"pages": 1, "bodyEndPage": "overset", "storyOverset": true, "noteEndPage": "overset"},  "bodyOverset": {"pages": 1, "bodyEndPage": "overset", "storyOverset": true}}
