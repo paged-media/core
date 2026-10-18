@@ -453,20 +453,136 @@ fn write_structure(
     let root_ref = refs.alloc();
     let document_ref = refs.alloc();
     let article_ref = refs.alloc();
+    // Each story paragraph: its own marks and, when it holds a table, its
+    // cell paragraphs' (ADR 182 amended, `tagged-tables-probe`: InDesign
+    // sets them as `Table` > `TR` > `TH`/`TD` > `P` under the paragraph).
+    type CellMarks = BTreeMap<(u32, u32, u32, bool), Vec<(usize, i32)>>;
+    let mut hosts: BTreeMap<(u32, u32, u32), (Vec<(usize, i32)>, CellMarks)> = BTreeMap::new();
+    for (key, marks) in &paragraphs {
+        let host = hosts
+            .entry((key.story, key.paragraph, key.sub))
+            .or_default();
+        match key.cell {
+            None => host.0.extend(marks.iter().copied()),
+            Some(c) => host
+                .1
+                .entry((c.row, c.col, c.paragraph, c.header))
+                .or_default()
+                .extend(marks.iter().copied()),
+        }
+    }
     let mut stories: BTreeMap<u32, (Ref, Vec<Ref>)> = BTreeMap::new();
     let mut para_refs: BTreeMap<paged_compose::StructKey, Ref> = BTreeMap::new();
-    for key in paragraphs.keys() {
-        let story = stories
-            .entry(key.story)
+    let mut host_refs: BTreeMap<(u32, u32, u32), Ref> = BTreeMap::new();
+    for &(story, paragraph, sub) in hosts.keys() {
+        let entry = stories
+            .entry(story)
             .or_insert_with(|| (refs.alloc(), Vec::new()));
         let r = refs.alloc();
-        story.1.push(r);
-        para_refs.insert(*key, r);
+        entry.1.push(r);
+        host_refs.insert((story, paragraph, sub), r);
     }
-    for (key, marks) in &paragraphs {
-        let (story_ref, _) = stories[&key.story];
-        let mut e = pdf.struct_element(para_refs[key]);
-        match name_of(key) {
+    // Write one element's marked content as its children.
+    fn write_marks(
+        kids: &mut pdf_writer::writers::StructChildren<'_>,
+        marks: &[(usize, i32)],
+        pages: &[FinishedPage],
+    ) {
+        for &(page_idx, mcid) in marks {
+            if Some(page_idx) == marks.first().map(|m| m.0) {
+                kids.marked_content_id(mcid);
+            } else {
+                kids.marked_content_ref()
+                    .page(pages[page_idx].page_ref)
+                    .marked_content_id(mcid);
+            }
+        }
+    }
+    for (&(story, paragraph, sub), (own, cells)) in &hosts {
+        let host_ref = host_refs[&(story, paragraph, sub)];
+        let story_ref = stories[&story].0;
+        let host_key = paged_compose::StructKey {
+            story,
+            paragraph,
+            sub,
+            cell: None,
+        };
+        para_refs.insert(host_key, host_ref);
+        // The table, its rows, cells and cell paragraphs.
+        let table_ref = (!cells.is_empty()).then(|| refs.alloc());
+        if let Some(table_ref) = table_ref {
+            type Cell = (bool, Vec<(u32, Vec<(usize, i32)>)>);
+            let mut rows: BTreeMap<u32, BTreeMap<u32, Cell>> = BTreeMap::new();
+            for (&(row, col, cpara, header), marks) in cells {
+                let cell = rows.entry(row).or_default().entry(col).or_default();
+                cell.0 = header;
+                cell.1.push((cpara, marks.clone()));
+            }
+            let row_refs: Vec<Ref> = rows.keys().map(|_| refs.alloc()).collect();
+            {
+                let mut t = pdf.struct_element(table_ref);
+                t.kind(StructRole::Table);
+                t.parent(host_ref);
+                let mut c = t.children();
+                for rr in &row_refs {
+                    c.struct_element(*rr);
+                }
+            }
+            for ((&row, cols), &row_ref) in rows.iter().zip(&row_refs) {
+                let cell_refs: Vec<Ref> = cols.keys().map(|_| refs.alloc()).collect();
+                {
+                    let mut tr = pdf.struct_element(row_ref);
+                    tr.kind(StructRole::TR);
+                    tr.parent(table_ref);
+                    let mut c = tr.children();
+                    for cr in &cell_refs {
+                        c.struct_element(*cr);
+                    }
+                }
+                for ((&col, (header, paras)), &cell_ref) in cols.iter().zip(&cell_refs) {
+                    let p_refs: Vec<Ref> = paras.iter().map(|_| refs.alloc()).collect();
+                    {
+                        let mut td = pdf.struct_element(cell_ref);
+                        td.kind(if *header {
+                            StructRole::TH
+                        } else {
+                            StructRole::TD
+                        });
+                        td.parent(row_ref);
+                        let mut c = td.children();
+                        for pr in &p_refs {
+                            c.struct_element(*pr);
+                        }
+                    }
+                    for ((cpara, marks), &pr) in paras.iter().zip(&p_refs) {
+                        para_refs.insert(
+                            paged_compose::StructKey {
+                                story,
+                                paragraph,
+                                sub,
+                                cell: Some(paged_compose::CellKey {
+                                    row,
+                                    col,
+                                    paragraph: *cpara,
+                                    header: *header,
+                                }),
+                            },
+                            pr,
+                        );
+                        let mut e = pdf.struct_element(pr);
+                        e.kind(StructRole::P);
+                        e.parent(cell_ref);
+                        if let Some(&(first, _)) = marks.first() {
+                            e.page(pages[first].page_ref);
+                        }
+                        let mut kids = e.children();
+                        write_marks(&mut kids, marks, pages);
+                    }
+                }
+            }
+        }
+        let mut e = pdf.struct_element(host_ref);
+        match name_of(&host_key) {
             Some(name) => {
                 e.custom_kind(Name(name.as_bytes()));
                 let role = match input.doc.structure_roles.get(name).map(String::as_str) {
@@ -486,18 +602,13 @@ fn write_structure(
             }
         }
         e.parent(story_ref);
-        if let Some(&(first, _)) = marks.first() {
+        if let Some(&(first, _)) = own.first() {
             e.page(pages[first].page_ref);
         }
         let mut kids = e.children();
-        for &(page_idx, mcid) in marks {
-            if Some(page_idx) == marks.first().map(|m| m.0) {
-                kids.marked_content_id(mcid);
-            } else {
-                kids.marked_content_ref()
-                    .page(pages[page_idx].page_ref)
-                    .marked_content_id(mcid);
-            }
+        write_marks(&mut kids, own, pages);
+        if let Some(t) = table_ref {
+            kids.struct_element(t);
         }
     }
     for (story_ref, kids) in stories.values() {

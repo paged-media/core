@@ -1158,20 +1158,38 @@ fn emit_table(
                         origin,
                         by_leading,
                         ..
-                    } => emit_cell_paragraph(
-                        em,
-                        paragraph,
-                        target_page,
-                        (inner_left, inner_top),
-                        inner_w,
-                        origin + shift,
-                        pages,
-                        total_stats,
-                        cell_addr_base.as_ref().map(|addr| (addr, *index as u32)),
-                        *by_leading,
-                        inner_h - origin,
-                        block.first_baseline,
-                    ),
+                    } => {
+                        // ADR 182 — a tagged PDF sets the cell's paragraphs
+                        // as the cells of a table (top-level tables only).
+                        if nested.is_none() {
+                            em.tag_cell_glyphs(
+                                &mut pages[target_page].list,
+                                Some(paged_compose::CellKey {
+                                    row: r as u32,
+                                    col: c as u32,
+                                    paragraph: *index as u32,
+                                    header: r < header_count,
+                                }),
+                            );
+                        }
+                        emit_cell_paragraph(
+                            em,
+                            paragraph,
+                            target_page,
+                            (inner_left, inner_top),
+                            inner_w,
+                            origin + shift,
+                            pages,
+                            total_stats,
+                            cell_addr_base.as_ref().map(|addr| (addr, *index as u32)),
+                            *by_leading,
+                            inner_h - origin,
+                            block.first_baseline,
+                        );
+                        if nested.is_none() {
+                            em.tag_cell_glyphs(&mut pages[target_page].list, None);
+                        }
+                    }
                     // A table nested in the cell, at its measured top (ADR
                     // 176); further nesting recurses.
                     CellItem::Table { table, top, .. } => {

@@ -52,6 +52,17 @@ reads the result. For the `text` and `navigation` fixtures InDesign writes:
   document with none writes no `/Lang`; InDesign then writes its application's language, which an
   IDML does not carry.
 
+## Amendment 2026-10-18: tables and paragraphs within one range
+
+`tagged-tables-probe` asks InDesign 20.0.1 how it tags a table: the paragraph that holds the table
+holds `Table` > one `TR` per row > `TH` for a header row's cells, `TD` for a body row's > one `P`
+per cell paragraph holding the cell's text; the standard types need no role map. The engine now
+writes the same tree: a cell paragraph's glyphs carry their cell (`StructKey::cell`: row, column,
+paragraph, header), and the writer nests them under their paragraph. A model paragraph that holds
+several of InDesign's paragraphs (its text split at paragraph marks) gives each its own element
+(`StructKey::sub`), as InDesign does. Nested tables are left untagged; cell paragraphs are written
+as `P`, where InDesign names them after their style.
+
 ## Consequences
 
 - `tagged_pdf`:
@@ -65,7 +76,6 @@ reads the result. For the `text` and `navigation` fixtures InDesign writes:
     already honours it: `H`, `H1`…`H6` map to themselves, anything else to `P`, as InDesign wrote a
     style tagged `Artifact`;
   - text inside transparency groups and soft masks (written into forms, left unmarked);
-  - table cells (`Table` / `TR` / `TD`), footnotes, figures with alt text, and artifacts for page
-    furniture;
+  - footnotes, figures with alt text, and artifacts for page furniture;
   - articles, XML tags and export tags as the reading order;
   - PDF/UA.
