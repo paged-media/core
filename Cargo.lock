@@ -2655,6 +2655,7 @@ dependencies = [
  "paged-wire",
  "serde",
  "serde_json",
+ "zip",
 ]
 
 [[package]]
