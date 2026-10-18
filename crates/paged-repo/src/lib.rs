@@ -41,7 +41,9 @@ pub use object::{
     decode, encode, Actor, ActorKind, ChunkList, Commit, EntryKind, ImportedFrom, Provenance, Tree,
     TreeEntry,
 };
-pub use pack::{faulting, read_records, write_record, Flush, Loc, PackFile, PackStore};
+pub use pack::{
+    faulting, keep_bytes, kept_bytes, read_records, write_record, Flush, Loc, PackFile, PackStore,
+};
 pub use package::{
     bundle_parts, import, part_entry, project, read_part, Bundle, Snapshot, CHUNK_THRESHOLD,
     HISTORY_PREFIX,

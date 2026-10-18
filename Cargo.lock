@@ -2931,6 +2931,7 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "fastcdc",
+ "miniz_oxide 0.8.9",
  "serde",
  "serde_json",
  "sha2",

@@ -30,26 +30,76 @@ use crate::{address, verify_chain, Error, Hash, Kind, Store};
 
 const INDEX_RECORD: usize = 32 + 1 + 8 + 4;
 
-pub fn write_record(out: &mut Vec<u8>, kind: Kind, hash: &Hash, bytes: &[u8]) -> u64 {
-    out.push(kind.tag());
-    out.extend_from_slice(&hash.0);
-    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    let at = out.len() as u64;
-    out.extend_from_slice(bytes);
-    at
+/// The kind tag's high bit: the record's bytes are deflated. Addresses are
+/// always of the uncompressed bytes; compression is only how they are kept.
+const DEFLATED: u8 = 0x80;
+/// Inflating more than this is refused: a record is a part, a chunk or a tree.
+const INFLATE_MAX: usize = 64 * 1024 * 1024;
+
+/// The bytes to keep for `bytes`, deflated when that is smaller.
+fn deflate(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() < 64 {
+        return None;
+    }
+    let packed = miniz_oxide::deflate::compress_to_vec(bytes, 6);
+    (packed.len() + 8 < bytes.len()).then_some(packed)
 }
 
-/// Every record in `raw`, verified against its address.
+fn inflate(stored: &[u8], hash: &Hash) -> Result<Vec<u8>, Error> {
+    miniz_oxide::inflate::decompress_to_vec_with_limit(stored, INFLATE_MAX)
+        .map_err(|_| Error::Tampered(*hash))
+}
+
+/// One object as a host keeps it outside a pack (an object store): a flag
+/// byte, then the bytes, deflated when that is smaller.
+pub fn keep_bytes(bytes: &[u8]) -> Vec<u8> {
+    match deflate(bytes) {
+        Some(d) => [&[1u8][..], &d].concat(),
+        None => [&[0u8][..], bytes].concat(),
+    }
+}
+
+/// What [`keep_bytes`] kept, as the object's bytes again.
+pub fn kept_bytes(kept: &[u8], hash: &Hash) -> Result<Vec<u8>, Error> {
+    match kept.split_first() {
+        Some((0, rest)) => Ok(rest.to_vec()),
+        Some((1, rest)) => inflate(rest, hash),
+        _ => Err(Error::Tampered(*hash)),
+    }
+}
+
+/// Appends one record; returns where its bytes start, how many were written,
+/// and whether they are deflated.
+pub fn write_record(out: &mut Vec<u8>, kind: Kind, hash: &Hash, bytes: &[u8]) -> (u64, u32, bool) {
+    let packed = deflate(bytes);
+    let (tag, body) = match &packed {
+        Some(d) => (kind.tag() | DEFLATED, d.as_slice()),
+        None => (kind.tag(), bytes),
+    };
+    out.push(tag);
+    out.extend_from_slice(&hash.0);
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    let at = out.len() as u64;
+    out.extend_from_slice(body);
+    (at, body.len() as u32, packed.is_some())
+}
+
+/// Every record in `raw`, inflated and verified against its address.
 pub fn read_records(raw: &[u8]) -> Result<Vec<(Kind, Hash, Vec<u8>)>, Error> {
     let mut out = Vec::new();
     let mut at = 0usize;
     while at < raw.len() {
         let short = || Error::Package("truncated pack".into());
         let head = raw.get(at..at + 37).ok_or_else(short)?;
-        let kind = Kind::from_tag(head[0]).ok_or_else(short)?;
+        let kind = Kind::from_tag(head[0] & !DEFLATED).ok_or_else(short)?;
         let hash = Hash(head[1..33].try_into().expect("32 bytes"));
         let len = u32::from_le_bytes(head[33..37].try_into().expect("4 bytes")) as usize;
-        let bytes = raw.get(at + 37..at + 37 + len).ok_or_else(short)?.to_vec();
+        let stored = raw.get(at + 37..at + 37 + len).ok_or_else(short)?;
+        let bytes = if head[0] & DEFLATED != 0 {
+            inflate(stored, &hash)?
+        } else {
+            stored.to_vec()
+        };
         if address(kind, &bytes) != hash {
             return Err(Error::Tampered(hash));
         }
@@ -64,8 +114,10 @@ pub fn read_records(raw: &[u8]) -> Result<Vec<(Kind, Hash, Vec<u8>)>, Error> {
 pub struct Loc {
     pub pack: u32,
     pub offset: u64,
+    /// Bytes kept in the pack (deflated ones are fewer than the object's).
     pub len: u32,
     pub kind: Kind,
+    pub deflated: bool,
 }
 
 /// A new pack and its index, to be written as two files.
@@ -108,8 +160,9 @@ impl PackStore {
         }
         for r in index.chunks(INDEX_RECORD) {
             let hash = Hash(r[..32].try_into().expect("32 bytes"));
-            let kind = Kind::from_tag(r[32])
+            let kind = Kind::from_tag(r[32] & !DEFLATED)
                 .ok_or_else(|| Error::Package(format!("index of pack {pack}: bad kind")))?;
+            let deflated = r[32] & DEFLATED != 0;
             let offset = u64::from_le_bytes(r[33..41].try_into().expect("8 bytes"));
             let len = u32::from_le_bytes(r[41..45].try_into().expect("4 bytes"));
             self.index.entry(hash).or_insert(Loc {
@@ -117,6 +170,7 @@ impl PackStore {
                 offset,
                 len,
                 kind,
+                deflated,
             });
         }
         self.next_pack = self.next_pack.max(pack + 1);
@@ -161,8 +215,14 @@ impl PackStore {
     }
 
     /// Hands over an object read from its pack, checked against its address.
+    /// `bytes` are as read from the pack: deflated ones are inflated here.
     pub fn provide(&mut self, hash: Hash, bytes: Vec<u8>) -> Result<(), Error> {
         let loc = self.index.get(&hash).ok_or(Error::Missing(hash))?;
+        let bytes = if loc.deflated {
+            inflate(&bytes, &hash)?
+        } else {
+            bytes
+        };
         if address(loc.kind, &bytes) != hash {
             return Err(Error::Tampered(hash));
         }
@@ -188,18 +248,23 @@ impl PackStore {
             let mut index = Vec::new();
             for (kind, hash) in std::mem::take(&mut self.pending) {
                 let bytes = &self.cache[&hash];
-                let offset = write_record(&mut data, kind, &hash, bytes);
+                let (offset, len, deflated) = write_record(&mut data, kind, &hash, bytes);
                 index.extend_from_slice(&hash.0);
-                index.push(kind.tag());
+                index.push(if deflated {
+                    kind.tag() | DEFLATED
+                } else {
+                    kind.tag()
+                });
                 index.extend_from_slice(&offset.to_le_bytes());
-                index.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                index.extend_from_slice(&len.to_le_bytes());
                 self.index.insert(
                     hash,
                     Loc {
                         pack: id,
                         offset,
-                        len: bytes.len() as u32,
+                        len,
                         kind,
+                        deflated,
                     },
                 );
             }

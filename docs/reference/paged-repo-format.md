@@ -107,6 +107,12 @@ repository as:
 |---|---|
 | `packs/<n>.pack` | object records, as in the history bundle; append-only, one per write |
 | `packs/<n>.idx` | one 45-byte record per object: address, kind tag, u64 offset of its bytes, u32 length (little-endian) |
+
+A record's bytes are deflated when that makes them smaller; the kind tag's high bit (`0x80`)
+says so, in the pack and in its index, and the length is of the bytes kept. Addresses are
+always of the uncompressed bytes, so compression never changes what an object is. Inflating
+more than 64 MiB from one record is refused. An object kept outside a pack (an object store)
+is a flag byte (`0` plain, `1` deflated) followed by its bytes (`keep_bytes`).
 | `refs.json` | `{name: address}`, rewritten whole |
 | `evidence.jsonl` | one canonical evidence entry per line, appended |
 
