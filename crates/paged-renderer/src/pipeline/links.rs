@@ -38,6 +38,7 @@
 //! | `LastPageNumberType` | the LABEL of the last page of the document (`DocumentScope`) or of the page's section (`SectionScope`): "3" on a five-page document whose numbering restarts — not a count; `Format` other than `Current` re-styles that page's number |
 //! | `PageCountType`     | real total page count (the engine's own older name; InDesign does not write it) |
 //! | `ChapterNumberType` | the DOCUMENT's chapter number (`<ChapterNumberPreference>`, default 1) — not a section property: InDesign printed "1" on pages whose sections had markers and restarts |
+//! | `XrefChapterNumberType` | a cross-reference's chapter number: the same, live — InDesign printed "IX" for a reference whose stored text was "VII" once the chapter number changed, with no update (`xref-chapter-probe`) |
 //! | `FileNameType`      | document `Name`, without its extension unless `IncludeExtension` |
 //! | `CreationDateType` / `ModificationDateType` / `OutputDateType` | `Format` tokens applied to the document clock |
 //! | (anything else)     | baked `ResultText`                            |
@@ -273,7 +274,7 @@ pub(crate) fn resolve_variable(
         "CreationDateType" => Some(decorate(format_date_var(var, ctx.clock.creation))),
         "ModificationDateType" => Some(decorate(format_date_var(var, ctx.clock.modification))),
         "OutputDateType" => Some(decorate(format_date_var(var, ctx.clock.output))),
-        "ChapterNumberType" => {
+        "ChapterNumberType" | "XrefChapterNumberType" => {
             let pref = ctx.designmap.chapter_number.as_ref();
             let number = pref.and_then(|p| p.number).unwrap_or(1);
             let style = explicit_number_style(var.number_format.as_deref())

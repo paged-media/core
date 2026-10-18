@@ -290,3 +290,36 @@ fn a_growing_story_prints_the_final_page_count_in_every_footer() {
         assert_eq!(footer, format!("Page{}of3", i + 1), "page {}", i + 1);
     }
 }
+
+/// A cross-reference's chapter number prints the document's chapter
+/// number live, in its chapter format, as InDesign 20.0.1 prints it
+/// (`tools/indesign-export/xref-chapter-probe`): the reference in
+/// InDesign's own package stores "VII"; with the chapter number set to 9
+/// InDesign printed "Chapter IX, page 2" without an update.
+#[test]
+fn xref_chapter_number_is_the_documents_live() {
+    let bytes = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/xref-chapter-indesign.idml"),
+    )
+    .expect("fixture");
+    let font = read_font("Inter.ttf");
+    let opts = PipelineOptions {
+        font: Some(&font),
+        collect_glyph_runs: true,
+        ..PipelineOptions::default()
+    };
+    let mut document = idml_import::import_idml_doc(&bytes).unwrap();
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    let text = glyph_text(&built.pages[0]);
+    assert!(text.contains("ChapterVII,page2"), "{text:?}");
+
+    document
+        .designmap
+        .chapter_number
+        .as_mut()
+        .expect("InDesign wrote the preference")
+        .number = Some(9);
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    let text = glyph_text(&built.pages[0]);
+    assert!(text.contains("ChapterIX,page2"), "{text:?}");
+}
