@@ -352,6 +352,54 @@ impl Repository {
             .map_err(js)
     }
 
+    /// Saves a file as an agent's version on `branch` (an `agent/…` ref, started
+    /// at `base` when it does not exist yet), with provenance naming the person
+    /// it acted for. A save that changed nothing makes no version. Returns the
+    /// branch head.
+    #[wasm_bindgen(js_name = saveAgent)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_agent(
+        &mut self,
+        file: &[u8],
+        branch: &str,
+        base: &str,
+        agent: &str,
+        client: &str,
+        run: &str,
+        on_behalf_of: &str,
+        message: &str,
+        ts: f64,
+    ) -> Result<String, JsError> {
+        let ctx = Ctx {
+            actor: Actor::agent(agent),
+            ts: ts as i64,
+            provenance: Some(paged_repo::Provenance {
+                client: client.to_string(),
+                model: None,
+                run: run.to_string(),
+                on_behalf_of: on_behalf_of.to_string(),
+            }),
+        };
+        if self.repo.head(branch).is_none() {
+            let start = self
+                .repo
+                .head(base)
+                .ok_or_else(|| JsError::new(&format!("no ref {base}")))?;
+            self.repo
+                .receive(Default::default(), branch, None, Some(start), &ctx, false)
+                .map_err(js)?;
+        }
+        let snap = paged_repo::import(file, "save").map_err(js)?;
+        let head = self.repo.head(branch).expect("just made");
+        if self.repo.read_commit(&head).map_err(js)?.tree == snap.tree {
+            return Ok(head.to_hex());
+        }
+        self.repo
+            .commit(snap.objects, snap.tree, branch, &ctx, message, None)
+            .map(|h| h.to_hex())
+            .map_err(js)
+    }
+
     /// The `.paged` bytes of a ref or of a commit address.
     pub fn export(
         &mut self,
