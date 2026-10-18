@@ -4111,6 +4111,28 @@ pub enum Operation {
     DeleteNote {
         note_id: String,
     },
+    /// v74 — accept the tracked deletion whose place stands at contiguous
+    /// story char `offset` (D-01): the text stays deleted, the change goes.
+    /// Inverse: `RestoreTrackedChange`.
+    AcceptTrackedChange {
+        story_id: String,
+        offset: u32,
+    },
+    /// v74 — reject the tracked deletion at `offset` (D-01): its text comes
+    /// back where its place stood. Inverse: `RestoreTrackedChange`.
+    RejectTrackedChange {
+        story_id: String,
+        offset: u32,
+    },
+    /// v74 — inverse-only: take out the `remove` chars at `offset` and put
+    /// tracked deletion `change` (JSON) and its place back there. Inverse:
+    /// the accept or reject it undoes.
+    RestoreTrackedChange {
+        story_id: String,
+        offset: u32,
+        remove: u32,
+        change: String,
+    },
     /// v72 — create bookmark `bookmark_id` named `name` (ADR 173) under
     /// `parent` (the top level when `None`) at `index` among its children
     /// (the end when `None`), going to destination `destination` or else

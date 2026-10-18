@@ -447,6 +447,18 @@ pub(crate) fn apply_inner(
             modification_date,
         } => note::apply_edit_note(doc, note_id, text, modification_date.as_deref()),
         Operation::DeleteNote { note_id } => note::apply_delete_note(doc, note_id),
+        Operation::AcceptTrackedChange { story_id, offset } => {
+            tracked_change::apply_accept(doc, story_id, *offset)
+        }
+        Operation::RejectTrackedChange { story_id, offset } => {
+            tracked_change::apply_reject(doc, story_id, *offset)
+        }
+        Operation::RestoreTrackedChange {
+            story_id,
+            offset,
+            remove,
+            change,
+        } => tracked_change::apply_restore(doc, story_id, *offset, *remove, change),
         Operation::CreateBookmark {
             bookmark_id,
             name,
@@ -1069,6 +1081,7 @@ mod insert_node;
 mod layer;
 mod lock;
 mod note;
+mod tracked_change;
 /// ADR 132 — model → wire-spec readers, for the `Set` resolver: a
 /// virtual path on a swatch, gradient or numbering list is an edit of the
 /// whole spec, read here, merged and written back.

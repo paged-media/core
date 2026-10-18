@@ -4614,6 +4614,18 @@ impl CanvasModel {
             Mutation::DeleteNote { note_id } => Some(Operation::DeleteNote {
                 note_id: note_id.clone(),
             }),
+            Mutation::AcceptTrackedChange { story_id, offset } => {
+                Some(Operation::AcceptTrackedChange {
+                    story_id: story_id.clone(),
+                    offset: *offset,
+                })
+            }
+            Mutation::RejectTrackedChange { story_id, offset } => {
+                Some(Operation::RejectTrackedChange {
+                    story_id: story_id.clone(),
+                    offset: *offset,
+                })
+            }
             Mutation::InsertEndnote {
                 story_id,
                 offset,

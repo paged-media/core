@@ -1295,6 +1295,16 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(guarded(paged_edit_note), js_string!("editNote"), 2)
         .function(guarded(paged_delete_note), js_string!("deleteNote"), 1)
         .function(
+            guarded(paged_accept_tracked_change),
+            js_string!("acceptTrackedChange"),
+            2,
+        )
+        .function(
+            guarded(paged_reject_tracked_change),
+            js_string!("rejectTrackedChange"),
+            2,
+        )
+        .function(
             guarded(paged_convert_note_to_text),
             js_string!("convertNoteToText"),
             1,
@@ -3224,6 +3234,44 @@ fn paged_delete_note(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
         .to_string(ctx)?
         .to_std_string_escaped();
     Ok(apply_bool(&Mutation::DeleteNote { note_id }))
+}
+
+/// `paged.acceptTrackedChange(storyId, offset)` — accept the tracked
+/// deletion at a story offset, as `paged.collection("trackedChanges")`
+/// lists it (`Mutation::AcceptTrackedChange`, D-01).
+fn paged_accept_tracked_change(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::AcceptTrackedChange {
+        story_id,
+        offset,
+    }))
+}
+
+/// `paged.rejectTrackedChange(storyId, offset)` — reject the tracked
+/// deletion at a story offset: its text comes back
+/// (`Mutation::RejectTrackedChange`, D-01).
+fn paged_reject_tracked_change(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::RejectTrackedChange {
+        story_id,
+        offset,
+    }))
 }
 
 /// `paged.convertNoteToText(noteId)` — Convert to Text

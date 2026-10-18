@@ -687,7 +687,7 @@ export type WorkerToMain = WorkerToMainKind & {
 // v73 — endnotes edited (ADR 174): insertEndnote, deleteEndnote,
 //   convertFootnoteToEndnote and the `endnotes` collection; the first
 //   endnote makes the endnote story on a page of its own.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(73);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(74);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only

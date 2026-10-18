@@ -91,6 +91,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   a destination), `renameBookmark`, `moveBookmark` (nesting and order) and `deleteBookmark` (with
   its children and the page destinations nothing else goes to) edit the tree as InDesign does,
   and it saves as InDesign reads it back ([ADR 173](adr/173-bookmarks-edited.md)).
+- **Tracked changes.** A tracked deletion is kept as InDesign keeps it, a character of the text
+  that prints nothing, with its author, date and deleted text (`documentCollection:trackedChanges`),
+  and it saves as it was read; `acceptTrackedChange` and `rejectTrackedChange` resolve it as
+  InDesign does, the text staying deleted or coming back ([ADR 184](adr/184-tracked-changes.md),
+  protocol 74). An edit in a story with a tracked insertion keeps the insertion wrapped.
+  Insertions are not listed or resolved yet, and typing does not record changes.
 - **One object model.** Every object has an address (`doc`, `page:#2`, `swatch:Color/Red`,
   `style:object/<id>`, `cell:<table>/0,1`, `textVariable:<id>`, …) and selectors find them
   (`page:#3 > frame[name="price"]`, `RequestQuery`, `paged.query`, `paged query`)

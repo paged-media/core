@@ -1079,6 +1079,20 @@
       "summary": "Delete an editorial note and its place in the text. Undo puts it back as it was."
     },
     {
+      "name": "paged.acceptTrackedChange",
+      "params": "(storyId, offset)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Accept a tracked deletion at its story offset (paged.collection(\"trackedChanges\")): the text stays deleted. Undoable."
+    },
+    {
+      "name": "paged.rejectTrackedChange",
+      "params": "(storyId, offset)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Reject a tracked deletion at its story offset: its text comes back where it stood, as InDesign rejects one. Undoable."
+    },
+    {
       "name": "paged.convertNoteToText",
       "params": "(noteId)",
       "returns": "bool",
@@ -1677,6 +1691,8 @@
     "insertNote",
     "editNote",
     "deleteNote",
+    "acceptTrackedChange",
+    "rejectTrackedChange",
     "convertNoteToText",
     "createBookmark",
     "deleteBookmark",
