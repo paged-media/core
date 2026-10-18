@@ -1003,6 +1003,11 @@ pub struct BuiltDocument {
     /// from the lines: a line's range leaves out trailing spaces, and a
     /// paragraph past the last frame has no line at all.
     pub(crate) paragraph_starts: HashMap<String, Vec<u32>>,
+    /// ADR 182 — per story (in document order), per paragraph: the name a
+    /// tagged PDF gives its structure element, after its paragraph style
+    /// ([`structure_name`]). Filled when glyph runs are collected (the
+    /// tagged export reads it); empty otherwise.
+    pub structure_names: Vec<Vec<String>>,
     /// ADR 027 §7 / plan step 7 — per page, whether this build laid
     /// any of its content out afresh (rather than splicing it from an emit
     /// cache) AND that content may differ from the previous build's. A
@@ -1022,6 +1027,17 @@ pub(crate) struct OversetMeasure {
     pub(crate) dropped_height_64: i64,
     /// Summed line heights each chain frame took, by frame id.
     pub(crate) frame_heights_64: HashMap<String, i64>,
+}
+
+/// The structure-element name InDesign gives a paragraph in a tagged PDF:
+/// its style's name with every character but an ASCII letter or digit
+/// turned into `_` (`$ID/[No paragraph style]` → `_No_paragraph_style_`;
+/// measured, InDesign 20.0.1, `tagged-pdf-probe` / `tagged-styles-probe`).
+pub fn structure_name(style_name: &str) -> String {
+    let name = style_name.strip_prefix("$ID/").unwrap_or(style_name);
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
 }
 
 impl BuiltDocument {

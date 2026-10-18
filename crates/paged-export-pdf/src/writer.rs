@@ -424,9 +424,21 @@ fn write_structure(
     pdf: &mut Pdf,
     refs: &mut RefAllocator,
     pages: &[FinishedPage],
-    _input: &ExportInput<'_>,
+    input: &ExportInput<'_>,
 ) -> Ref {
     use pdf_writer::types::StructRole;
+    // InDesign names each paragraph after its style and its containers
+    // `Article` and `Story`, and role-maps the names to standard types
+    // (ADR 182; `tagged-styles-probe`).
+    let names = &input.doc.structure_names;
+    let name_of = |key: &paged_compose::StructKey| -> Option<&str> {
+        names
+            .get(key.story as usize)
+            .and_then(|s| s.get(key.paragraph as usize))
+            .map(String::as_str)
+            .filter(|n| !n.is_empty())
+    };
+    let mut roles: BTreeMap<String, StructRole> = BTreeMap::new();
     use std::collections::BTreeMap;
     // Paragraphs in order, each with its (page, mcid) marks.
     let mut paragraphs: BTreeMap<paged_compose::StructKey, Vec<(usize, i32)>> = BTreeMap::new();
@@ -454,7 +466,15 @@ fn write_structure(
     for (key, marks) in &paragraphs {
         let (story_ref, _) = stories[&key.story];
         let mut e = pdf.struct_element(para_refs[key]);
-        e.kind(StructRole::P);
+        match name_of(key) {
+            Some(name) => {
+                e.custom_kind(Name(name.as_bytes()));
+                roles.insert(name.to_string(), StructRole::P);
+            }
+            None => {
+                e.kind(StructRole::P);
+            }
+        }
         e.parent(story_ref);
         if let Some(&(first, _)) = marks.first() {
             e.page(pages[first].page_ref);
@@ -472,7 +492,7 @@ fn write_structure(
     }
     for (story_ref, kids) in stories.values() {
         let mut e = pdf.struct_element(*story_ref);
-        e.kind(StructRole::Sect);
+        e.custom_kind(Name(b"Story"));
         e.parent(article_ref);
         let mut c = e.children();
         for k in kids {
@@ -481,7 +501,7 @@ fn write_structure(
     }
     {
         let mut e = pdf.struct_element(article_ref);
-        e.kind(StructRole::Art);
+        e.custom_kind(Name(b"Article"));
         e.parent(document_ref);
         let mut c = e.children();
         for (story_ref, _) in stories.values() {
@@ -506,6 +526,14 @@ fn write_structure(
             .indirect(root_ref)
             .start::<pdf_writer::writers::StructTreeRoot>();
         root.child(document_ref);
+        {
+            let mut map = root.role_map();
+            map.insert(Name(b"Article"), StructRole::Art);
+            map.insert(Name(b"Story"), StructRole::Sect);
+            for (name, role) in &roles {
+                map.insert(Name(name.as_bytes()), *role);
+            }
+        }
         {
             let mut tree = root.parent_tree();
             let mut nums = tree.nums();

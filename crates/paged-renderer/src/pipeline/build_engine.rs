@@ -3945,6 +3945,34 @@ pub(super) fn build_document_inner(
         })
         .collect();
 
+    let structure_names = if options.collect_glyph_runs {
+        document
+            .stories
+            .iter()
+            .map(|s| {
+                s.story
+                    .paragraphs
+                    .iter()
+                    .map(|p| {
+                        let id = p
+                            .paragraph_style
+                            .as_deref()
+                            .unwrap_or("ParagraphStyle/$ID/[No paragraph style]");
+                        let name = document
+                            .styles
+                            .paragraph_styles
+                            .get(id)
+                            .and_then(|d| d.name.as_deref())
+                            .unwrap_or_else(|| id.strip_prefix("ParagraphStyle/").unwrap_or(id));
+                        super::structure_name(name)
+                    })
+                    .collect()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(BuiltDocument {
         pages,
         stats: total_stats,
@@ -3953,6 +3981,7 @@ pub(super) fn build_document_inner(
         resource_tiles_needed,
         overset,
         paragraph_starts,
+        structure_names,
         grow_passes: 1,
         fresh_pages: fresh,
     })

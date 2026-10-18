@@ -37,7 +37,11 @@ reads the result. For the `text` and `navigation` fixtures InDesign writes:
 - **Exporter, with `tagged` on:**
   - Each text object whose glyphs carry a key is wrapped in `/P <</MCID n>> BDC … EMC`, one MCID
     per text object.
-  - It writes `Document` → `Art` → one `Sect` per story → one `P` per paragraph, in key order. A
+  - It writes `Document` → `Article` → one `Story` per story → one element per paragraph, in key
+    order. Each paragraph element is named after its paragraph style as InDesign names it (every
+    character but an ASCII letter or digit becomes `_`, so `$ID/[No paragraph style]` is
+    `_No_paragraph_style_`), and the role map sends `Article` to `Art`, `Story` to `Sect` and every
+    style name to `P` (amended 2026-10-18, `tagged-styles-probe`). A
     paragraph on several pages references its later pages' marks through `/MCR` with `/Pg`.
   - The parent tree maps each page's MCIDs to their paragraphs, and every page gets
     `/StructParents`.
@@ -55,7 +59,9 @@ reads the result. For the `text` and `navigation` fixtures InDesign writes:
   - an ignored test writes the `navigation` export. `pdf-structure.py` reads it as the same tree
     as InDesign's (six elements, one marked-content id per paragraph).
 - Not built yet:
-  - paragraph elements named after their style through the role map (they are written as `P`);
+  - a paragraph style's PDF export tag (`<StyleExportTagMap ExportType="PDF" ExportTag="H1">`) as
+    its role: InDesign maps such a style to `H1`; the engine maps every style to `P`. A style tagged
+    `Artifact` still came out as `P` in InDesign's export;
   - text inside transparency groups and soft masks (written into forms, left unmarked);
   - table cells (`Table` / `TR` / `TD`), footnotes, figures with alt text, and artifacts for page
     furniture;
