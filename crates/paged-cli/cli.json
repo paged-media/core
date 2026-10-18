@@ -779,6 +779,140 @@
       "subcommands": []
     },
     {
+      "about": "Collect the document, its linked files and its fonts into one folder (InDesign's File ▸ Package)",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "The package folder",
+          "long": "out",
+          "name": "out",
+          "positional": false,
+          "repeatable": false,
+          "required": true,
+          "short": "o",
+          "takesValues": true,
+          "valueNames": [
+            "OUT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Text for `Instructions.txt`, instead of the default note",
+          "long": "instructions",
+          "name": "instructions",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "INSTRUCTIONS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Print the report as JSON instead of text",
+          "long": "json",
+          "name": "json",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "JSON"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for. Absent, the face the CLI bundles (Inter) stands in",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "No fallback face: text no registered family answers for is not set, and the run says so (to see what a document is missing)",
+          "long": "no-default-font",
+          "name": "no_default_font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "NO_DEFAULT_FONT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": "Collect the document, its linked files and its fonts into one folder (InDesign's File ▸ Package).\n\nWrites `<name>.idml` with its links pointed into `Links/`, copies every linked file there, copies the faces of each used family from those given with `--fonts` / `--font-family` / `--font` into `Document fonts/` (a face whose licence restricts copying is listed, not copied), and writes `Instructions.txt` and `<name> Report.txt`. OUT must not exist or be empty.",
+      "name": "package",
+      "subcommands": []
+    },
+    {
       "about": "Mint a blank document",
       "args": [
         {

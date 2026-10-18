@@ -32,6 +32,7 @@ pub mod invoke;
 pub mod new;
 pub mod object;
 pub mod options;
+pub mod package;
 pub mod parts;
 pub mod place;
 pub mod query;

@@ -49,6 +49,8 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 serde_json = "1"
+# `package_folder` reads the packaged IDML back.
+zip = { workspace = true }
 
 [lints]
 workspace = true
