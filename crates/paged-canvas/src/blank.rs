@@ -149,14 +149,24 @@ pub fn blank_idml(width_pt: f32, height_pt: f32) -> Vec<u8> {
     put("Resources/Graphic.xml", &graphic(), false);
     put("Resources/Fonts.xml", &empty_pkg("Fonts"), false);
     put("Resources/Styles.xml", &styles(), false);
-    // The one text preference the engine composes under: no optical
-    // sizing (InDesign's application default re-instances variable
-    // fonts by point size — see `paged_gen::builders::resources::
-    // preferences_xml`).
+    // The document's setup in InDesign's spelling (A-33): without a
+    // `<DocumentPreference>` InDesign opens the blank with ITS default
+    // document size (Letter, measured on 20.0.1) beside the page's own
+    // 400 x 300 pt, so every page added there came out Letter. Single
+    // pages (the master is one page), no bleed. Then the one text
+    // preference the engine composes under: no optical sizing
+    // (InDesign's application default re-instances variable fonts by
+    // point size — see `paged_gen::builders::resources::preferences_xml`).
     put(
         "Resources/Preferences.xml",
         &xml(&format!(
             "<idPkg:Preferences xmlns:idPkg=\"{NS}\" DOMVersion=\"20.0\">\
+<DocumentPreference PageHeight=\"{height_pt}\" PageWidth=\"{width_pt}\" PagesPerDocument=\"1\" \
+FacingPages=\"false\" DocumentBleedTopOffset=\"0\" DocumentBleedBottomOffset=\"0\" \
+DocumentBleedInsideOrLeftOffset=\"0\" DocumentBleedOutsideOrRightOffset=\"0\" \
+DocumentBleedUniformSize=\"true\" SlugTopOffset=\"0\" SlugBottomOffset=\"0\" \
+SlugInsideOrLeftOffset=\"0\" SlugRightOrOutsideOffset=\"0\" DocumentSlugUniformSize=\"false\" \
+PageBinding=\"LeftToRight\" ColumnDirection=\"Horizontal\" Intent=\"PrintIntent\"/>\
 <TextPreference UseOpticalSize=\"false\"/></idPkg:Preferences>"
         )),
         false,
@@ -182,5 +192,18 @@ mod tests {
         assert_eq!(doc.spreads.len(), 1);
         assert_eq!(doc.spreads[0].spread.pages.len(), 1);
         assert!(doc.stories.is_empty());
+    }
+
+    /// A-33 — the document's setup is the page's: InDesign reads the
+    /// document size and single pages from `<DocumentPreference>`.
+    #[test]
+    fn blank_idml_states_its_document_setup() {
+        let doc = idml_import::import_idml(&blank_idml(400.0, 300.0))
+            .expect("blank IDML must parse")
+            .0;
+        let dp = &doc.designmap.document_preference;
+        assert_eq!(dp.page_width, Some(400.0));
+        assert_eq!(dp.page_height, Some(300.0));
+        assert_eq!(dp.facing_pages, Some(false));
     }
 }
