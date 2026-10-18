@@ -91,7 +91,7 @@ fn entries(idml: &[u8]) -> BTreeMap<String, Vec<u8>> {
         if e.is_dir() {
             continue;
         }
-        let name = e.name().to_string();
+        let name = e.name().unwrap().into_owned();
         let mut buf = Vec::new();
         e.read_to_end(&mut buf).expect("read entry");
         out.insert(name, buf);
@@ -2190,6 +2190,49 @@ fn inserted_text_frame_with_minted_story_survives_export() {
 /// has no source entry — the same hole, spread-shaped. The writer emits
 /// a full spread part (page + any items inserted onto it) and adds the
 /// `<idPkg:Spread>` ref after its host so page order survives.
+/// A30 — a removed page drops out of the save: its spread part and its
+/// designmap entry go, and the rest re-import in order.
+#[test]
+fn removed_page_spread_drops_out_of_the_export() {
+    let original = build_sample("geometry");
+    let doc = idml_import::import_idml_doc(&original).unwrap();
+    let n_spreads = doc.spreads.len();
+    assert!(n_spreads > 1, "the fixture has several spreads");
+    let gone = doc.spreads[0].spread.pages[0]
+        .self_id
+        .clone()
+        .expect("page id");
+    let kept: Vec<Option<String>> = doc.spreads[1..]
+        .iter()
+        .map(|s| s.spread.self_id.clone())
+        .collect();
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::RemovePage {
+            page_id: gone.clone(),
+        })
+        .expect("remove page");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
+    assert_eq!(re.spreads.len(), n_spreads - 1, "spread count");
+    let ids: Vec<Option<String>> = re
+        .spreads
+        .iter()
+        .map(|s| s.spread.self_id.clone())
+        .collect();
+    assert_eq!(ids, kept, "the remaining spreads, in order");
+    assert!(
+        !re.spreads.iter().any(|s| s
+            .spread
+            .pages
+            .iter()
+            .any(|p| p.self_id.as_deref() == Some(gone.as_str()))),
+        "the removed page is gone"
+    );
+}
+
 #[test]
 fn inserted_page_spread_survives_export() {
     let original = build_sample("geometry");

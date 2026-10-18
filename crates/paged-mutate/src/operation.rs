@@ -1281,6 +1281,18 @@ pub enum PropertyPath {
     CellRightEdgeStrokeWeight,
     CellRightEdgeStrokeTint,
 
+    // ---- ADR 175 — row placement ----------------------------------
+    // A row's own options, addressed through any `NodeId::TableCell` of
+    // the row (InDesign's `cell.parentRow`).
+    /// `<Row StartRow="…">`: where the row starts. `Value::Text`
+    /// carrying the IDML spelling (`"Anywhere"`, `"NextColumn"`,
+    /// `"NextFrame"`, `"NextPage"`, `"NextOddPage"`, `"NextEvenPage"`);
+    /// empty clears it to the default, `Anywhere`. Reflow-affecting.
+    RowStartRow,
+    /// `<Row KeepWithNextRow="…">`: the row stays in the frame of the row
+    /// after it. `Value::Bool`. Reflow-affecting.
+    RowKeepWithNext,
+
     // ---- Aftercare-A — table dimensions (READ-ONLY) -------------
     // Like `NextTextFrame` / `PreviousTextFrame`, these exist only so
     // the inspector can *read* a table's shape as `PropertyEntry`s:
@@ -1822,6 +1834,8 @@ impl PropertyPath {
             PropertyPath::CellRightEdgeStrokeColor => "cell.rightEdgeStrokeColor",
             PropertyPath::CellRightEdgeStrokeWeight => "cell.rightEdgeStrokeWeight",
             PropertyPath::CellRightEdgeStrokeTint => "cell.rightEdgeStrokeTint",
+            PropertyPath::RowStartRow => "row.startRow",
+            PropertyPath::RowKeepWithNext => "row.keepWithNext",
             // Aftercare-A — table dimensions (read-only).
             PropertyPath::TableRowCount => "table.rowCount",
             PropertyPath::TableColumnCount => "table.columnCount",
@@ -3352,7 +3366,7 @@ pub enum Operation {
         position: usize,
         story_json: String,
     },
-    /// v73 — set story `story_id`'s paragraphs to `paragraphs_json` (a
+    /// v0.71.13 — set story `story_id`'s paragraphs to `paragraphs_json` (a
     /// JSON `Vec<Paragraph>`), whole: what Update Table of Contents writes
     /// into a TOC story (ADR 165). Inverse: itself, carrying the
     /// paragraphs it replaced.
@@ -4038,7 +4052,7 @@ pub enum Operation {
         #[serde(default)]
         page: Option<String>,
     },
-    /// v73 — insert a footnote (ADR 163): its reference at contiguous
+    /// v0.71.13 — insert a footnote (ADR 163): its reference at contiguous
     /// story char `offset` (a reference marker character) and the note,
     /// whose text opens with its number and the document's separator,
     /// then `text`. `footnote_id` is the note's `Self`. `restore` is
@@ -4056,11 +4070,148 @@ pub enum Operation {
         #[serde(default)]
         restore: Option<String>,
     },
-    /// v73 — remove a footnote: its reference marker and the note.
+    /// v0.71.13 — remove a footnote: its reference marker and the note.
     /// Inverse: `InsertFootnote` carrying the note's paragraphs.
     RemoveFootnote {
         story_id: String,
         footnote_id: String,
+    },
+    /// v72 — insert an editorial note (ADR 172): its place, a
+    /// [`paged_model::NOTE_MARKER`] character, at contiguous story char
+    /// `offset` (the `InsertFootnote` address space), and note `note_id`
+    /// with `text` (paragraphs separated by U+000D), `user` as its
+    /// `UserName` and `date` as its creation and modification dates.
+    /// `restore` is inverse-only: the deleted note (JSON), put back as it
+    /// was. Inverse: `DeleteNote`.
+    InsertNote {
+        story_id: String,
+        offset: u32,
+        #[serde(default)]
+        paragraph: Option<u32>,
+        note_id: String,
+        text: String,
+        #[serde(default)]
+        user: Option<String>,
+        #[serde(default)]
+        date: Option<String>,
+        #[serde(default)]
+        restore: Option<String>,
+    },
+    /// v72 — set note `note_id`'s text and its modification date, both
+    /// verbatim (`None` clears the date). Inverse: `EditNote` with what it
+    /// replaced.
+    EditNote {
+        note_id: String,
+        text: String,
+        #[serde(default)]
+        modification_date: Option<String>,
+    },
+    /// v72 — delete note `note_id` and its place. Inverse: `InsertNote`
+    /// carrying the note.
+    DeleteNote {
+        note_id: String,
+    },
+    /// v74 — accept the tracked deletion whose place stands at contiguous
+    /// story char `offset` (D-01): the text stays deleted, the change goes.
+    /// Inverse: `RestoreTrackedChange`.
+    AcceptTrackedChange {
+        story_id: String,
+        offset: u32,
+    },
+    /// v74 — reject the tracked deletion at `offset` (D-01): its text comes
+    /// back where its place stood. Inverse: `RestoreTrackedChange`.
+    RejectTrackedChange {
+        story_id: String,
+        offset: u32,
+    },
+    /// v74 — inverse-only: take out the `remove` chars at `offset` and put
+    /// tracked deletion `change` (JSON) and its place back there. Inverse:
+    /// the accept or reject it undoes.
+    RestoreTrackedChange {
+        story_id: String,
+        offset: u32,
+        remove: u32,
+        change: String,
+    },
+    /// v72 — create bookmark `bookmark_id` named `name` (ADR 173) under
+    /// `parent` (the top level when `None`) at `index` among its children
+    /// (the end when `None`), going to destination `destination` or else
+    /// to page `page` through a new page destination `dest_id`. Inverse:
+    /// `RestoreBookmarks`.
+    CreateBookmark {
+        bookmark_id: String,
+        name: String,
+        #[serde(default)]
+        parent: Option<String>,
+        #[serde(default)]
+        index: Option<u32>,
+        #[serde(default)]
+        destination: Option<String>,
+        #[serde(default)]
+        page: Option<String>,
+        dest_id: String,
+    },
+    /// v72 — delete bookmark `bookmark_id`, the bookmarks under it and the
+    /// page destinations nothing else goes to. Inverse: `RestoreBookmarks`.
+    DeleteBookmark {
+        bookmark_id: String,
+    },
+    /// v72 — rename bookmark `bookmark_id`. Inverse: `RestoreBookmarks`.
+    RenameBookmark {
+        bookmark_id: String,
+        name: String,
+    },
+    /// v72 — move bookmark `bookmark_id` and the bookmarks under it under
+    /// `parent` (the top level when `None`) at `index` among its children
+    /// (the end when `None`). Inverse: `RestoreBookmarks`.
+    MoveBookmark {
+        bookmark_id: String,
+        #[serde(default)]
+        parent: Option<String>,
+        #[serde(default)]
+        index: Option<u32>,
+    },
+    /// v73 — insert an endnote (ADR 174): its reference at contiguous
+    /// story char `offset` (an endnote reference character) and its range
+    /// `range_id` in the endnote story, after the range of the reference
+    /// before it (the opening mark, its number, the separator, `text`, the
+    /// closing mark). `restore` is inverse-only: the deleted note (JSON),
+    /// put back as it was. The document must hold an endnote story
+    /// (`CreateEndnoteStory`). Inverse: `DeleteEndnote`.
+    InsertEndnote {
+        story_id: String,
+        offset: u32,
+        #[serde(default)]
+        paragraph: Option<u32>,
+        endnote_id: String,
+        range_id: String,
+        text: String,
+        #[serde(default)]
+        restore: Option<String>,
+    },
+    /// v73 — delete endnote `endnote_id`: its reference and its range, with
+    /// the break before it. Inverse: `InsertEndnote` carrying the note.
+    DeleteEndnote {
+        endnote_id: String,
+    },
+    /// v73 — the endnote story a first endnote makes (ADR 174): a page at
+    /// the end (`spread_id` / `page_id`, minted when `None`), text frame
+    /// `frame_id` over its margin box as the `<EndnoteTextFrame>`, and story
+    /// `story_id` in it, the endnote story, holding the title. Inverse: the
+    /// frame's and the page's removal.
+    CreateEndnoteStory {
+        #[serde(default)]
+        spread_id: Option<String>,
+        #[serde(default)]
+        page_id: Option<String>,
+        frame_id: String,
+        story_id: String,
+    },
+    /// v72 — inverse-only: put the bookmarks, their nesting and the
+    /// hyperlink destinations back as captured (`state`, JSON). Inverse:
+    /// another `RestoreBookmarks`.
+    RestoreBookmarks {
+        state: String,
     },
     /// v53 — inverse-only companion to `InsertHyperlink`: clear the
     /// `hyperlink_source == source_id` tag from every run of `story_id` and
@@ -4079,14 +4230,14 @@ pub enum Operation {
         #[serde(default)]
         page: Option<String>,
     },
-    /// v73 — delete hyperlink `hyperlink_id` of any origin (ADR 164):
+    /// v0.71.13 — delete hyperlink `hyperlink_id` of any origin (ADR 164):
     /// every run its source tags stops linking, the record goes, and so
     /// does its URL or page destination when nothing else points at it.
     /// Inverse: `RestoreHyperlink`.
     DeleteHyperlink {
         hyperlink_id: String,
     },
-    /// v73 — edit hyperlink `hyperlink_id` (ADR 164): `name` renames it
+    /// v0.71.13 — edit hyperlink `hyperlink_id` (ADR 164): `name` renames it
     /// (empty clears it); `page` or else `url` sends it somewhere new,
     /// rewriting its own destination of that kind in place, or moving it to
     /// a new destination `dest_id` when its destination is shared, a text
@@ -4101,7 +4252,7 @@ pub enum Operation {
         page: Option<String>,
         dest_id: String,
     },
-    /// v73 — inverse-only: put a hyperlink back as captured (`state`, JSON):
+    /// v0.71.13 — inverse-only: put a hyperlink back as captured (`state`, JSON):
     /// the record where it stood, its destinations as they were, and its
     /// source tag over the same runs. Inverse: another `RestoreHyperlink`.
     RestoreHyperlink {

@@ -1882,6 +1882,55 @@ pub(super) fn apply_cell_property(
     // the parsed `(col, row)` coords.
     let table = find_table_mut(doc, story_id, table_id)
         .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    // ADR 175 — a row's own options, through any of its cells.
+    if matches!(
+        path,
+        PropertyPath::RowStartRow | PropertyPath::RowKeepWithNext
+    ) {
+        if !table.cells.iter().any(|c| c.coords() == Some((*col, *row))) {
+            return Err(OperationError::NodeNotFound(node.clone()));
+        }
+        let target = table
+            .rows
+            .get_mut(*row as usize)
+            .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+        let inverse_value = if path == PropertyPath::RowStartRow {
+            let new = expect_text(path, value)?;
+            let start = if new.is_empty() {
+                None
+            } else {
+                Some(paged_model::StartParagraph::from_idml(&new).ok_or_else(|| {
+                    OperationError::InvalidValue {
+                        node: node.clone(),
+                        path,
+                        reason: format!("not a StartRow value: {new:?}"),
+                    }
+                })?)
+            };
+            let prev = target.start_row.map(|s| s.as_idml()).unwrap_or_default();
+            target.start_row = start;
+            Value::Text(prev.to_string())
+        } else {
+            let new = expect_bool(path, value)?;
+            let prev = target.keep_with_next_row.unwrap_or(false);
+            target.keep_with_next_row = Some(new);
+            Value::Bool(prev)
+        };
+        let invalidation = reflow_hint_for_story(doc, story_id);
+        return Ok(AppliedOperation {
+            op: Operation::SetProperty {
+                node: node.clone(),
+                path,
+                value: value.clone(),
+            },
+            inverse: Operation::SetProperty {
+                node: node.clone(),
+                path,
+                value: inverse_value,
+            },
+            invalidation,
+        });
+    }
     let cell = table
         .cells
         .iter_mut()

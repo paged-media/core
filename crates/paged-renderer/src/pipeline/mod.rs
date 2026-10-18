@@ -108,7 +108,7 @@ pub(crate) use blend_shadow::{
     push_blend_group, push_target_group, resolve_frame_shadow, shadow_group_blend, target_opacity,
 };
 use build_engine::*;
-pub use build_engine::{build_index_paragraphs, toc_paragraphs};
+pub use build_engine::{index_paragraphs, toc_paragraphs};
 pub(crate) use color_paint::{apply_fill_tint_ctx, object_tint, stroke_for};
 use color_paint::{build_cmyk_transform, CmykTransformRef};
 use color_paint::{
@@ -142,6 +142,7 @@ pub use metrics::*;
 pub use nested_styles::*;
 #[cfg(test)]
 use numbering::list_prefix;
+pub use numbering::story_list_labels;
 use numbering::{bullet_marker_character_style, list_prefix_with_levels, marker_run_attrs};
 #[cfg(test)]
 use numbering::{format_number, substitute_numbering_expression};
@@ -845,6 +846,13 @@ pub struct EmittedFootnote {
     /// The entry continues a note from an earlier column or frame: it
     /// heads its area, under the continuing rule (ADR 161).
     pub continued: bool,
+    /// Where a continued note's text resumes (ADR 178): the segment of
+    /// the note (a paragraph, or a piece a forced line break splits off)
+    /// and the byte in that segment's shaped text where the next line
+    /// starts. Its lines are composed from there at its own area's width,
+    /// as InDesign recomposes a note's continuation in a frame of another
+    /// width. `None` for a note's first area.
+    pub resume_at: Option<(u32, u32)>,
     /// Page-local baseline of the line holding the note's reference: the
     /// pool never rises above it (see `emit_footnote_pools`).
     pub ref_baseline_pt: f32,
@@ -995,6 +1003,15 @@ pub struct BuiltDocument {
     /// from the lines: a line's range leaves out trailing spaces, and a
     /// paragraph past the last frame has no line at all.
     pub(crate) paragraph_starts: HashMap<String, Vec<u32>>,
+    /// ADR 182 — per story (in document order), per paragraph: the name a
+    /// tagged PDF gives its structure element, after its paragraph style
+    /// ([`structure_name`]). Filled when glyph runs are collected (the
+    /// tagged export reads it); empty otherwise.
+    pub structure_names: Vec<Vec<String>>,
+    /// The standard structure type each name in [`Self::structure_names`]
+    /// role-maps to: the style's PDF export tag when it names a heading
+    /// or a paragraph (`H`, `H1`…`H6`, `P`), `P` otherwise.
+    pub structure_roles: std::collections::BTreeMap<String, String>,
     /// ADR 027 §7 / plan step 7 — per page, whether this build laid
     /// any of its content out afresh (rather than splicing it from an emit
     /// cache) AND that content may differ from the previous build's. A
@@ -1014,6 +1031,33 @@ pub(crate) struct OversetMeasure {
     pub(crate) dropped_height_64: i64,
     /// Summed line heights each chain frame took, by frame id.
     pub(crate) frame_heights_64: HashMap<String, i64>,
+}
+
+/// The structure-element name InDesign gives a paragraph in a tagged PDF:
+/// its style's name with every character but an ASCII letter or digit
+/// turned into `_` (`$ID/[No paragraph style]` → `_No_paragraph_style_`;
+/// measured, InDesign 20.0.1, `tagged-pdf-probe` / `tagged-styles-probe`).
+pub fn structure_name(style_name: &str) -> String {
+    let name = style_name.strip_prefix("$ID/").unwrap_or(style_name);
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// The standard type a style's PDF export tag role-maps to: a heading
+/// level or `P`. Anything else is written as `P`, as InDesign 20.0.1 wrote
+/// a style tagged `Artifact` (`tagged-styles-probe`).
+pub fn structure_role(pdf_export_tag: Option<&str>) -> &'static str {
+    match pdf_export_tag {
+        Some("H") => "H",
+        Some("H1") => "H1",
+        Some("H2") => "H2",
+        Some("H3") => "H3",
+        Some("H4") => "H4",
+        Some("H5") => "H5",
+        Some("H6") => "H6",
+        _ => "P",
+    }
 }
 
 impl BuiltDocument {
@@ -1211,6 +1255,10 @@ pub enum GeneratedKind {
     TextVariable,
     /// The placeholder an inline anchored object takes in its line.
     AnchoredObject,
+    /// An editorial note's place (ADR 172), which prints nothing.
+    Note,
+    /// A tracked deletion's place (D-01), which prints nothing.
+    TrackedDeletion,
 }
 
 /// A [`GeneratedSpan`] before it is cut to a line: a byte range of its
@@ -1320,6 +1368,10 @@ struct PostLayoutCtx {
     /// Story `<Self>` id (and any text-anchor id that maps to a story)
     /// → flat 0-based page index of that story's first laid-out line.
     story_page: HashMap<String, u32>,
+    /// Cross-reference source `<Self>` → the flat page index its
+    /// destination paragraph was laid out on (ADR 169): what the source's
+    /// `XRefPageNumber` prints, live, as InDesign prints it.
+    xref_page: HashMap<String, usize>,
 }
 
 /// Build one `BuiltPage` per `<Page>` in the document. Each page's
@@ -1414,9 +1466,19 @@ pub fn build_document(
         let mut changed = false;
         for story in &growing {
             let count = counts[story];
+            // A story needs another page when it drops text, or when a
+            // note of its has no column or frame left to continue in
+            // (C-44): the grow rule paginates notes as Word does. InDesign
+            // does not count a note's overset as the story's
+            // (`footnote-reflow-probe`: a split note past the last frame
+            // leaves `overflows` false), but its documents carry no grow
+            // rule — Word's (ADR 034) do.
             let overset = built.diagnostics.items.iter().any(|d| {
-                d.code == crate::diagnostics::DiagnosticCode::OversetTextDropped
-                    && d.story_id.as_deref() == Some(story.as_str())
+                matches!(
+                    d.code,
+                    crate::diagnostics::DiagnosticCode::OversetTextDropped
+                        | crate::diagnostics::DiagnosticCode::FootnoteOverflow
+                ) && d.story_id.as_deref() == Some(story.as_str())
             });
             if overset {
                 let tries = estimated.entry(story.as_str()).or_insert(0);
@@ -1433,14 +1495,22 @@ pub fn build_document(
                     changed = true;
                 }
             } else if count > 0 {
-                // Drop trailing generated frames that received no line.
+                // Drop trailing generated frames that received no line and
+                // no note of the story's (a page grown for a note's
+                // continuation holds only that).
                 let lines = built.story_layout(story);
                 let mut used = count;
                 while used > 0 {
                     let id = paged_scene::grow::generated_frame_id(story, used);
-                    if lines
-                        .iter()
-                        .any(|l| l.frame_id.as_deref() == Some(id.as_str()))
+                    let page = paged_scene::grow::generated_page_id(story, used);
+                    let holds_note = built.pages.iter().any(|p| {
+                        p.id.as_str() == page
+                            && p.footnotes.iter().any(|f| f.host_story_id == *story)
+                    });
+                    if holds_note
+                        || lines
+                            .iter()
+                            .any(|l| l.frame_id.as_deref() == Some(id.as_str()))
                     {
                         break;
                     }
@@ -1518,7 +1588,12 @@ fn build_document_fixed(
                 paged_model::HyperlinkDestinationKind::TextAnchor(_)
             )
         });
-    let single = !has_running_header && !has_text_anchor_dest;
+    // ADR 169 — a cross-reference prints its destination's page live.
+    let has_xref_page = dm
+        .text_variables
+        .iter()
+        .any(|v| v.variable_type.as_deref() == Some("XrefPageNumberType"));
+    let single = !has_running_header && !has_text_anchor_dest && !has_xref_page;
     let first = build_document_inner(document, options, None, adopt && single)?;
     if single {
         return Ok(first);
@@ -1705,7 +1780,55 @@ fn build_post_layout_ctx(document: &Document, first: &BuiltDocument) -> PostLayo
     PostLayoutCtx {
         running_headers,
         story_page,
+        xref_page: xref_pages(document, first),
     }
+}
+
+/// ADR 169 — each cross-reference source's destination page in `first`:
+/// source → its hyperlink → the destination's paragraph (a paragraph
+/// destination or a text anchor standing in a story) → the page that
+/// paragraph's first line was laid out on.
+fn xref_pages(document: &Document, first: &BuiltDocument) -> HashMap<String, usize> {
+    let mut out: HashMap<String, usize> = HashMap::new();
+    let sources: Vec<&str> = document
+        .stories
+        .iter()
+        .flat_map(|s| s.story.cross_reference_sources.iter())
+        .map(|x| x.self_id.as_str())
+        .collect();
+    if sources.is_empty() {
+        return out;
+    }
+    let laid_out = first.paragraph_pages();
+    let destinations: HashMap<&str, (&str, u32)> = document
+        .stories
+        .iter()
+        .flat_map(|s| {
+            s.story
+                .destinations
+                .iter()
+                .map(move |d| (d.self_id.as_str(), (s.self_id.as_str(), d.paragraph)))
+        })
+        .collect();
+    for source in sources {
+        let dest = document
+            .designmap
+            .hyperlinks
+            .iter()
+            .find(|h| h.source.as_deref() == Some(source))
+            .and_then(|h| h.destination.as_deref());
+        let page = dest
+            .and_then(|d| destinations.get(d))
+            .and_then(|(story, para)| {
+                laid_out
+                    .get(*story)
+                    .and_then(|m| m.get(&(*para as usize)).copied())
+            });
+        if let Some(page) = page {
+            out.insert(source.to_string(), page);
+        }
+    }
+    out
 }
 
 /// Single-page convenience: union every page's bounds and emit all

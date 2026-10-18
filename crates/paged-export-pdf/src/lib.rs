@@ -140,6 +140,30 @@ pub struct ExportOptions {
     /// Document title for the Info dict / XMP (from document
     /// metadata, NOT wall-clock-derived).
     pub title: Option<String>,
+    /// The PDF's bookmarks (`/Outlines`), in document order: InDesign's
+    /// Include Bookmarks (ADR 171). Empty writes none.
+    pub bookmarks: Vec<PdfBookmark>,
+    /// Create Tagged PDF (ADR 182): the logical structure InDesign
+    /// writes — Document, one Article, a Story per text story and a
+    /// paragraph element per paragraph, each holding its text's marked
+    /// content — with `/MarkInfo`, `/Lang` and the document title shown.
+    pub tagged: bool,
+    /// The document's language for `/Lang` (a BCP 47 tag such as
+    /// `en-US`), when known.
+    pub lang: Option<String>,
+}
+
+/// One PDF bookmark: an outline item going to a page, as InDesign 20.0.1
+/// exports a document's bookmarks (`pdf-outlines.py`): its title, nested
+/// under the nearest earlier item one level up, its destination the page
+/// fitted in the window (`/Fit`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PdfBookmark {
+    pub title: String,
+    /// 0 for a top-level bookmark.
+    pub depth: u32,
+    /// The 0-based index of the document page it goes to.
+    pub page_index: usize,
 }
 
 impl Default for ExportOptions {
@@ -159,6 +183,9 @@ impl Default for ExportOptions {
             // in-repo tests included.
             effect_dpi: 150.0,
             title: None,
+            bookmarks: Vec::new(),
+            tagged: false,
+            lang: None,
         }
     }
 }

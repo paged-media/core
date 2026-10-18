@@ -68,7 +68,8 @@ pub enum ReadCommand {
     /// characterStyles | objectStyles | cellStyles | tableStyles |
     /// layers | spreads | pages | masterPages | links | articles |
     /// hyperlinks | bookmarks | crossReferences | conditions |
-    /// conditionSets | fonts | indexTopics | inks | sections | stories
+    /// conditionSets | fonts | indexTopics | inks | sections | stories |
+    /// xmlTags | xmlElements
     Collection {
         #[command(flatten)]
         on: ReadTarget,

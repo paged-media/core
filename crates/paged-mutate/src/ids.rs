@@ -107,6 +107,9 @@ pub fn highest_u_hex_id(doc: &Document) -> u64 {
             for note in &para.footnotes {
                 scan_u_hex_id(&mut max, note.self_id.as_deref());
             }
+            for note in &para.notes {
+                scan_u_hex_id(&mut max, Some(&note.id));
+            }
         }
     }
     let dm = &doc.designmap;

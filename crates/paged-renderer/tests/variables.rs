@@ -290,3 +290,84 @@ fn a_growing_story_prints_the_final_page_count_in_every_footer() {
         assert_eq!(footer, format!("Page{}of3", i + 1), "page {}", i + 1);
     }
 }
+
+/// A cross-reference's chapter number prints the document's chapter
+/// number live, in its chapter format, as InDesign 20.0.1 prints it
+/// (`tools/indesign-export/xref-chapter-probe`): the reference in
+/// InDesign's own package stores "VII"; with the chapter number set to 9
+/// InDesign printed "Chapter IX, page 2" without an update.
+#[test]
+fn xref_chapter_number_is_the_documents_live() {
+    let bytes = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/xref-chapter-indesign.idml"),
+    )
+    .expect("fixture");
+    let font = read_font("Inter.ttf");
+    let opts = PipelineOptions {
+        font: Some(&font),
+        collect_glyph_runs: true,
+        ..PipelineOptions::default()
+    };
+    let mut document = idml_import::import_idml_doc(&bytes).unwrap();
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    let text = glyph_text(&built.pages[0]);
+    assert!(text.contains("ChapterVII,page2"), "{text:?}");
+
+    document
+        .designmap
+        .chapter_number
+        .as_mut()
+        .expect("InDesign wrote the preference")
+        .number = Some(9);
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    let text = glyph_text(&built.pages[0]);
+    assert!(text.contains("ChapterIX,page2"), "{text:?}");
+}
+
+/// A live caption prints the name of the link of the image its frame
+/// touches, live, as InDesign 20.0.1 prints it
+/// (`tools/indesign-export/caption-probe`): a caption frame set under a
+/// placed image, edge to edge, printed "Image: alpha-image.png", and
+/// "Image: beta-image.png" after the image was relinked, with no update.
+/// The fixture is InDesign's own package (its link re-pointed at
+/// `/Links`).
+#[test]
+fn live_caption_prints_the_touching_images_link_name() {
+    let bytes = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/caption-indesign.idml"),
+    )
+    .expect("fixture");
+    let font = read_font("Inter.ttf");
+    let opts = PipelineOptions {
+        font: Some(&font),
+        collect_glyph_runs: true,
+        ..PipelineOptions::default()
+    };
+    let mut document = idml_import::import_idml_doc(&bytes).unwrap();
+    let caption = document
+        .designmap
+        .text_variables
+        .iter()
+        .find(|v| v.name.as_deref() == Some("Caption Name"))
+        .expect("InDesign wrote the caption variable");
+    // The importer reads `<CaptionMetadataVariablePreference>`.
+    assert_eq!(
+        caption.metadata_provider.as_deref(),
+        Some("$ID/#LinkInfoNameStr")
+    );
+    assert_eq!(caption.text_before.as_deref(), Some("Image: "));
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    let text = glyph_text(&built.pages[0]);
+    assert!(text.contains("Image:alpha-image.png"), "{text:?}");
+
+    let image = document
+        .spreads
+        .iter_mut()
+        .flat_map(|s| s.spread.rectangles.iter_mut())
+        .find(|r| r.image_link.is_some())
+        .expect("the placed image");
+    image.image_link = Some("file:/Links/beta-image.png".to_string());
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    let text = glyph_text(&built.pages[0]);
+    assert!(text.contains("Image:beta-image.png"), "{text:?}");
+}

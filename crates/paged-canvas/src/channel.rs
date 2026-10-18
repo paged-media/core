@@ -675,7 +675,19 @@ export type WorkerToMain = WorkerToMainKind & {
 //   `spread_id`, and the read-only `tableHeaderRowCount` /
 //   `tableFooterRowCount` paths. All optional: a consumer detects them by
 //   presence, and one that needs them requires `canvas-wasm >= 0.71.13`.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(71);
+//   The same release carried insertFootnote / deleteFootnote (ADR 163),
+//   deleteHyperlink / editHyperlink (ADR 164) and updateTableOfContents
+//   (ADR 165) as new Mutation variants on 71.
+// v72 — generated text, notes and bookmarks over the wire: generateIndex
+//   (ADR 168), updateCrossReferences (ADR 169), insertNote / editNote /
+//   deleteNote / convertNoteToText and the `notes` collection (ADR 172),
+//   createBookmark / renameBookmark / moveBookmark / deleteBookmark and
+//   `BookmarkSummary.parent` (ADR 173), and `ExportPdfWireOptions.bookmarks`
+//   (ADR 171).
+// v73 — endnotes edited (ADR 174): insertEndnote, deleteEndnote,
+//   convertFootnoteToEndnote and the `endnotes` collection; the first
+//   endnote makes the endnote story on a page of its own.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(74);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -884,6 +896,16 @@ pub struct ExportPdfWireOptions {
     /// Document title for Info/XMP.
     #[serde(default)]
     pub title: Option<String>,
+    /// ADR 171 — write the document's bookmarks as the PDF's outline
+    /// (InDesign's Include Bookmarks). Off by default, as in InDesign's
+    /// print presets.
+    #[serde(default)]
+    pub bookmarks: bool,
+    /// ADR 182 — Create Tagged PDF: the document's logical structure
+    /// (stories and their paragraphs) with `/MarkInfo` and `/Lang`. Off
+    /// by default, as in InDesign's print presets.
+    #[serde(default)]
+    pub tagged: bool,
 }
 
 /// panels.md gap 20 — one structured PDF-export preflight finding for
@@ -2740,11 +2762,32 @@ pub enum CollectionName {
     ConditionSets,
     Fonts,
     IndexTopics,
-    /// v73 (ADR 163) — the document's footnotes, one row per note: its id,
+    /// v0.71.13 (ADR 163) — the document's footnotes, one row per note: its id,
     /// story, the story offset of its reference, the label it prints and
     /// the page it is set on, and its text. Backs `paged.insertFootnote`
     /// / `deleteFootnote` callers and a Footnotes panel.
     Footnotes,
+    /// ADR 174 — the document's endnotes, one row per note in reference
+    /// order: its id, story, the story offset of its reference, the number
+    /// it prints and its text. Backs `paged.insertEndnote` /
+    /// `deleteEndnote` callers and an Endnotes panel.
+    Endnotes,
+    /// ADR 172 — the document's editorial notes, one row per note: its id,
+    /// story, the story offset of its place, its text, author and dates.
+    /// Backs `paged.insertNote` / `editNote` / `deleteNote` /
+    /// `convertNoteToText` callers and a Notes panel.
+    Notes,
+    /// D-02 — the document's XML tags (`XML/Tags.xml`), one row per tag.
+    XmlTags,
+    /// D-02 — the document's XML structure depth-first, one row per
+    /// element: its tag, depth, what it tags, its attributes. An element
+    /// tagging a story is followed by the elements tagging its ranges.
+    XmlElements,
+    /// D-01 — the document's tracked changes, one row per change in story
+    /// order: its story, the story offset of its place, its kind, author,
+    /// date and text. Deletions today; tracked insertions read as the
+    /// story's text and are not listed yet.
+    TrackedChanges,
     /// Concept 2 — the Ink Manager's ink list (one row per spot
     /// swatch, carrying its output-time settings).
     Inks,
@@ -2805,6 +2848,11 @@ impl CollectionName {
             Self::Fonts => "fonts",
             Self::IndexTopics => "indexTopics",
             Self::Footnotes => "footnotes",
+            Self::Notes => "notes",
+            Self::XmlTags => "xmlTags",
+            Self::XmlElements => "xmlElements",
+            Self::TrackedChanges => "trackedChanges",
+            Self::Endnotes => "endnotes",
             Self::Inks => "inks",
             Self::Sections => "sections",
             Self::Stories => "stories",
@@ -2840,6 +2888,11 @@ impl CollectionName {
             "fonts" => Self::Fonts,
             "indexTopics" => Self::IndexTopics,
             "footnotes" => Self::Footnotes,
+            "notes" => Self::Notes,
+            "xmlTags" => Self::XmlTags,
+            "xmlElements" => Self::XmlElements,
+            "trackedChanges" => Self::TrackedChanges,
+            "endnotes" => Self::Endnotes,
             "inks" => Self::Inks,
             "sections" => Self::Sections,
             "stories" => Self::Stories,
@@ -3468,6 +3521,10 @@ pub struct BookmarkSummary {
     pub self_id: String,
     pub name: String,
     pub destination: String,
+    /// The bookmark it stands under (ADR 173); `None` at the top level.
+    /// The collection lists the bookmarks in document order, a parent
+    /// before its children.
+    pub parent: Option<String>,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<CrossReferenceSource>` summary.
@@ -3493,7 +3550,7 @@ pub struct IndexTopicSummary {
     pub sort_order: String,
 }
 
-/// v73 (ADR 163) — one footnote. Backs `documentCollection:footnotes`.
+/// v0.71.13 (ADR 163) — one footnote. Backs `documentCollection:footnotes`.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
@@ -3508,6 +3565,76 @@ pub struct FootnoteSummary {
     /// The page its note is set on, once laid out.
     pub page_index: Option<u32>,
     /// The note's text, without its number and separator.
+    pub text: String,
+}
+
+/// ADR 174 — one endnote. Backs `documentCollection:endnotes`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct EndnoteSummary {
+    /// The `<Endnote>` `Self` id (`DeleteEndnote.endnoteId`).
+    pub id: String,
+    pub story_id: String,
+    /// The story char offset (contiguous) of its reference.
+    pub offset: u32,
+    /// Its `<EndnoteRange>` in the endnote story.
+    pub range_id: Option<String>,
+    /// What its reference prints (`3`, `iv`, …).
+    pub label: Option<String>,
+    /// Its text, without its number and separator.
+    pub text: String,
+}
+
+/// D-02 — one XML element of the document's structure. Backs
+/// `documentCollection:xmlElements`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct XmlElementSummary {
+    pub self_id: String,
+    /// The tag's name (`Article`).
+    pub tag: String,
+    /// 0 for the root.
+    pub depth: u32,
+    /// The story or page item it tags, when it tags one.
+    pub content: Option<String>,
+    /// The story its text range stands in, when it tags a range.
+    pub story_id: Option<String>,
+    pub attributes: Vec<(String, String)>,
+}
+
+/// ADR 172 — one editorial note. Backs `documentCollection:notes`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteSummary {
+    /// The note's id (`EditNote.noteId` and the rest).
+    pub id: String,
+    pub story_id: String,
+    /// The story char offset (contiguous) of its place.
+    pub offset: u32,
+    /// Its text, paragraphs separated by U+000D.
+    pub text: String,
+    pub user_name: Option<String>,
+    pub creation_date: Option<String>,
+    pub modification_date: Option<String>,
+    pub collapsed: bool,
+}
+
+/// D-01 — one tracked change. Backs `documentCollection:trackedChanges`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedChangeSummary {
+    pub story_id: String,
+    /// The story char offset (contiguous) of its place.
+    pub offset: u32,
+    /// `InsertedText`, `DeletedText` or `MovedText`.
+    pub change_type: String,
+    pub user_name: Option<String>,
+    pub date: Option<String>,
+    /// The text it inserted or deleted, paragraphs separated by U+000D.
     pub text: String,
 }
 
@@ -4460,8 +4587,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v71() {
-        assert_eq!(PROTOCOL_VERSION.0, 71);
+    fn protocol_version_is_v74() {
+        assert_eq!(PROTOCOL_VERSION.0, 74);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

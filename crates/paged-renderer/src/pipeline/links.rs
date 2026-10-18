@@ -38,6 +38,8 @@
 //! | `LastPageNumberType` | the LABEL of the last page of the document (`DocumentScope`) or of the page's section (`SectionScope`): "3" on a five-page document whose numbering restarts — not a count; `Format` other than `Current` re-styles that page's number |
 //! | `PageCountType`     | real total page count (the engine's own older name; InDesign does not write it) |
 //! | `ChapterNumberType` | the DOCUMENT's chapter number (`<ChapterNumberPreference>`, default 1) — not a section property: InDesign printed "1" on pages whose sections had markers and restarts |
+//! | `LiveCaptionType` (provider `$ID/#LinkInfoNameStr`) | the file name of the link of the graphic frame the caption's frame touches or overlaps on its spread — live: InDesign printed the new name after a relink (`caption-probe`); other providers keep `ResultText` |
+//! | `XrefChapterNumberType` | a cross-reference's chapter number: the same, live — InDesign printed "IX" for a reference whose stored text was "VII" once the chapter number changed, with no update (`xref-chapter-probe`) |
 //! | `FileNameType`      | document `Name`, without its extension unless `IncludeExtension` |
 //! | `CreationDateType` / `ModificationDateType` / `OutputDateType` | `Format` tokens applied to the document clock |
 //! | (anything else)     | baked `ResultText`                            |
@@ -162,6 +164,20 @@ pub(crate) struct VarResolveCtx<'a> {
     /// (pre-layout) pass; populated for the re-emit so running headers
     /// resolve to live content.
     pub running_headers: Option<&'a RunningHeaderIndex>,
+    /// The link URI a live caption in the emitting frame reads
+    /// ([`caption_link`]); `None` when no graphic frame touches it.
+    pub caption_link: Option<&'a str>,
+}
+
+/// ADR 169 — is `variable_id` a cross-reference page number
+/// (`XrefPageNumberType`, InDesign's `<?AID 001b?>TV XRefPageNumber`)?
+pub(crate) fn is_xref_page_number(designmap: &DesignMap, variable_id: &str) -> bool {
+    designmap
+        .text_variables
+        .iter()
+        .find(|v| v.self_id == variable_id)
+        .and_then(|v| v.variable_type.as_deref())
+        == Some("XrefPageNumberType")
 }
 
 /// True for the variable types whose value is another paragraph's or
@@ -262,7 +278,7 @@ pub(crate) fn resolve_variable(
         "CreationDateType" => Some(decorate(format_date_var(var, ctx.clock.creation))),
         "ModificationDateType" => Some(decorate(format_date_var(var, ctx.clock.modification))),
         "OutputDateType" => Some(decorate(format_date_var(var, ctx.clock.output))),
-        "ChapterNumberType" => {
+        "ChapterNumberType" | "XrefChapterNumberType" => {
             let pref = ctx.designmap.chapter_number.as_ref();
             let number = pref.and_then(|p| p.number).unwrap_or(1);
             let style = explicit_number_style(var.number_format.as_deref())
@@ -276,6 +292,10 @@ pub(crate) fn resolve_variable(
         // W1.18c — running header. Post-layout, the index carries the
         // matching text per page; pre-layout (index None) we keep the
         // baked value so the first pass still renders something.
+        "LiveCaptionType" => match var.metadata_provider.as_deref() {
+            Some("$ID/#LinkInfoNameStr") => ctx.caption_link.map(|uri| decorate(link_name(uri))),
+            _ => None,
+        },
         _ if is_running_header_type(Some(kind)) => {
             let Some(index) = ctx.running_headers else {
                 // First pass: keep baked ResultText (or a placeholder if
@@ -305,6 +325,95 @@ pub(crate) fn resolve_variable(
         }
         _ => None,
     }
+}
+
+/// Is `variable_id` a live caption (`LiveCaptionType`)?
+pub(crate) fn is_live_caption(designmap: &DesignMap, variable_id: &str) -> bool {
+    designmap
+        .text_variables
+        .iter()
+        .find(|v| v.self_id == variable_id)
+        .and_then(|v| v.variable_type.as_deref())
+        == Some("LiveCaptionType")
+}
+
+/// The link a live caption set in `frame` reads: that of the first
+/// placed graphic on the frame's spread whose frame touches or overlaps
+/// it. InDesign 20.0.1 read the image of the frame its caption frame
+/// was set under, edge to edge (`caption-probe`).
+pub(crate) fn caption_link<'d>(
+    document: &'d paged_scene::Document,
+    frame: &paged_model::TextFrame,
+) -> Option<&'d str> {
+    let spread = document.spreads.iter().find(|s| {
+        s.spread
+            .text_frames
+            .iter()
+            .any(|f| f.self_id.is_some() && f.self_id == frame.self_id)
+    })?;
+    let caption = spread_box(frame.bounds, frame.item_transform);
+    const TOUCH: f32 = 0.01;
+    let touches = |b: [f32; 4]| {
+        b[0] <= caption[2] + TOUCH
+            && caption[0] <= b[2] + TOUCH
+            && b[1] <= caption[3] + TOUCH
+            && caption[1] <= b[3] + TOUCH
+    };
+    let rects = spread.spread.rectangles.iter().filter_map(|r| {
+        r.image_link
+            .as_deref()
+            .filter(|_| touches(spread_box(r.bounds, r.item_transform)))
+    });
+    let ovals = spread.spread.ovals.iter().filter_map(|o| {
+        o.image_link
+            .as_deref()
+            .filter(|_| touches(spread_box(o.bounds, o.item_transform)))
+    });
+    rects.chain(ovals).next()
+}
+
+/// `[left, top, right, bottom]` of `bounds` under `transform`, in
+/// spread space.
+fn spread_box(b: paged_model::Bounds, transform: Option<[f32; 6]>) -> [f32; 4] {
+    let [a, bb, c, d, tx, ty] = transform.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let corners = [
+        (b.left, b.top),
+        (b.right, b.top),
+        (b.left, b.bottom),
+        (b.right, b.bottom),
+    ]
+    .map(|(x, y)| (a * x + c * y + tx, bb * x + d * y + ty));
+    let xs = corners.map(|p| p.0);
+    let ys = corners.map(|p| p.1);
+    [
+        xs.into_iter().fold(f32::INFINITY, f32::min),
+        ys.into_iter().fold(f32::INFINITY, f32::min),
+        xs.into_iter().fold(f32::NEG_INFINITY, f32::max),
+        ys.into_iter().fold(f32::NEG_INFINITY, f32::max),
+    ]
+}
+
+/// The file name a link URI names: its last segment, percent-decoded.
+fn link_name(uri: &str) -> String {
+    let path = uri.strip_prefix("file:").unwrap_or(uri);
+    let tail = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let bytes = tail.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// A `Format` naming an explicit numbering style; `None` for `Current`
@@ -530,6 +639,7 @@ mod tests {
             numbering: NO_NUMBERING.get_or_init(PageNumbering::default),
             page_index: 0,
             running_headers: None,
+            caption_link: None,
         }
     }
 

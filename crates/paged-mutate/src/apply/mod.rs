@@ -419,6 +419,111 @@ pub(crate) fn apply_inner(
             story_id,
             footnote_id,
         } => footnote::apply_remove_footnote(doc, story_id, footnote_id),
+        Operation::InsertNote {
+            story_id,
+            offset,
+            paragraph,
+            note_id,
+            text,
+            user,
+            date,
+            restore,
+        } => note::apply_insert_note(
+            doc,
+            story_id,
+            *offset,
+            *paragraph,
+            note_id,
+            note::NewNote {
+                text,
+                user: user.as_deref(),
+                date: date.as_deref(),
+            },
+            restore.as_deref(),
+        ),
+        Operation::EditNote {
+            note_id,
+            text,
+            modification_date,
+        } => note::apply_edit_note(doc, note_id, text, modification_date.as_deref()),
+        Operation::DeleteNote { note_id } => note::apply_delete_note(doc, note_id),
+        Operation::AcceptTrackedChange { story_id, offset } => {
+            tracked_change::apply_accept(doc, story_id, *offset)
+        }
+        Operation::RejectTrackedChange { story_id, offset } => {
+            tracked_change::apply_reject(doc, story_id, *offset)
+        }
+        Operation::RestoreTrackedChange {
+            story_id,
+            offset,
+            remove,
+            change,
+        } => tracked_change::apply_restore(doc, story_id, *offset, *remove, change),
+        Operation::CreateBookmark {
+            bookmark_id,
+            name,
+            parent,
+            index,
+            destination,
+            page,
+            dest_id,
+        } => bookmark::apply_create_bookmark(
+            doc,
+            bookmark_id,
+            name,
+            parent.as_deref(),
+            *index,
+            destination.as_deref(),
+            page.as_deref(),
+            dest_id,
+        ),
+        Operation::DeleteBookmark { bookmark_id } => {
+            bookmark::apply_delete_bookmark(doc, bookmark_id)
+        }
+        Operation::RenameBookmark { bookmark_id, name } => {
+            bookmark::apply_rename_bookmark(doc, bookmark_id, name)
+        }
+        Operation::MoveBookmark {
+            bookmark_id,
+            parent,
+            index,
+        } => bookmark::apply_move_bookmark(doc, bookmark_id, parent.as_deref(), *index),
+        Operation::RestoreBookmarks { state } => bookmark::apply_restore_bookmarks(doc, state),
+        Operation::InsertEndnote {
+            story_id,
+            offset,
+            paragraph,
+            endnote_id,
+            range_id,
+            text,
+            restore,
+        } => endnote::apply_insert_endnote(
+            doc,
+            story_id,
+            *offset,
+            *paragraph,
+            endnote::NewEndnote {
+                endnote_id,
+                range_id,
+                text,
+            },
+            restore.as_deref(),
+        ),
+        Operation::DeleteEndnote { endnote_id } => endnote::apply_delete_endnote(doc, endnote_id),
+        Operation::CreateEndnoteStory {
+            spread_id,
+            page_id,
+            frame_id,
+            story_id,
+        } => endnote::apply_create_endnote_story(
+            doc,
+            endnote::EndnoteStoryIds {
+                spread_id: spread_id.as_deref(),
+                page_id: page_id.as_deref(),
+                frame_id,
+                story_id,
+            },
+        ),
         Operation::InsertHyperlink {
             story_id,
             start,
@@ -963,7 +1068,9 @@ mod character;
 mod conditions;
 mod duplicate_nodes;
 pub use duplicate_nodes::{duplicate_demand, duplicate_roots, DuplicateDemand};
+mod bookmark;
 mod duplicate_page;
+mod endnote;
 mod flow;
 mod footnote;
 mod guides;
@@ -973,6 +1080,8 @@ mod hyperlink_edit;
 mod insert_node;
 mod layer;
 mod lock;
+mod note;
+mod tracked_change;
 /// ADR 132 — model → wire-spec readers, for the `Set` resolver: a
 /// virtual path on a swatch, gradient or numbering list is an edit of the
 /// whole spec, read here, merged and written back.

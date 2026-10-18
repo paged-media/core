@@ -48,6 +48,13 @@ fn main() -> Result<()> {
             pdf,
             assets,
         } => paged_cli::script::run(&doc, &assets, &script, &opts, &pdf),
+        Command::Package {
+            doc,
+            out,
+            instructions,
+            json,
+            assets,
+        } => paged_cli::package::run(&doc, &assets, &out, instructions.as_deref(), json),
         Command::New { size, format, out } => paged_cli::new::run(&size, &out, &format),
         Command::Gen { what } => match what {
             GenCommand::Emit { sample, out } => paged_cli::gen::emit(&sample, &out),

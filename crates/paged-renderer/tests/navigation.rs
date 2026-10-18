@@ -22,12 +22,12 @@
 //!   * the resolved TOC lists both `Heading`-styled paragraphs in
 //!     document order, each carrying its page number.
 //!
-//! These go through `Document::resolve_index` / `build_index_paragraphs`
-//! and `Document::resolve_toc` — the same passes the renderer uses to
-//! synthesise the index / TOC stories.
+//! These go through `Document::resolve_index_tree_on` / `index_paragraphs`
+//! and `Document::resolve_toc` — the passes behind Generate Index and
+//! Update Table of Contents (ADRs 165, 166).
 
 use paged_gen::samples::navigation;
-use paged_renderer::pipeline::build_index_paragraphs;
+use paged_renderer::pipeline::index_paragraphs;
 use paged_renderer::Document;
 
 fn open() -> Document {
@@ -40,19 +40,16 @@ fn resolved_index_story_lists_both_topic_markers() {
     let doc = open();
     // The fixture is a single body page → flat page index 0, labelled "1".
     let page_labels = vec!["1".to_string()];
-    let paragraphs = build_index_paragraphs(&doc, &page_labels);
+    let entries = doc.resolve_index_tree_on(&Default::default());
+    let paragraphs = index_paragraphs(doc.designmap.index_options.as_ref(), entries, &page_labels);
 
-    // One paragraph per topic, alphabetised by topic (BTreeMap order):
-    // "Apples" before "Pears".
-    let texts: Vec<&str> = paragraphs.iter().map(|p| p.runs[0].text.as_str()).collect();
-    assert_eq!(
-        texts.len(),
-        2,
-        "the index story must list both topic markers, got {texts:?}",
-    );
-    // Each entry is "<topic>\t<page>" — the marker landed on page "1".
-    assert_eq!(texts[0], "Apples\t1", "first index entry");
-    assert_eq!(texts[1], "Pears\t1", "second index entry");
+    // The title, then per letter its heading and its topics, alphabetised:
+    // "Apples" before "Pears", each behind two spaces on page "1".
+    let texts: Vec<String> = paragraphs
+        .iter()
+        .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect())
+        .collect();
+    assert_eq!(texts, ["Index", "A", "Apples  1", "P", "Pears  1"]);
 }
 
 #[test]

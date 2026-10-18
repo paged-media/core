@@ -338,7 +338,7 @@ fn an_orphan_story_reaches_no_part_and_one_loud_ledger_line() {
     let bytes = model.export_idml().expect("export");
     let names: Vec<String> = {
         let zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
-        zip.file_names().map(str::to_string).collect()
+        zip.file_names().map(|n| n.unwrap().into_owned()).collect()
     };
     let part = format!("Stories/Story_{}.xml", story.replace('/', "_"));
     assert!(!names.contains(&part), "no part for the orphan: {names:?}");

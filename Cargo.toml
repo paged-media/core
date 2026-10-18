@@ -57,7 +57,14 @@ too_many_arguments = "allow"
 thiserror = "2"
 anyhow = "1"
 bytes = "1"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# zip 9's `deflate` feature turns on flate2's zlib-rs backend (and zopfli),
+# and flate2 picks one backend for the whole graph, PDF export and PNG
+# included. Take `deflate-flate2` instead and ask for flate2's
+# `rust_backend` as zip 2's `deflate` did, so flate2's feature set, and
+# with it every deflated byte, stays what it was. Crates that depend on
+# `zip` list `flate2` beside it.
+zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 quick-xml = { version = "0.41", features = ["serialize"] }
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"

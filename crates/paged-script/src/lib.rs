@@ -1272,6 +1272,16 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             1,
         )
         .function(
+            guarded(paged_generate_index),
+            js_string!("generateIndex"),
+            1,
+        )
+        .function(
+            guarded(paged_update_cross_references),
+            js_string!("updateCrossReferences"),
+            1,
+        )
+        .function(
             guarded(paged_insert_footnote),
             js_string!("insertFootnote"),
             3,
@@ -1279,6 +1289,55 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(
             guarded(paged_delete_footnote),
             js_string!("deleteFootnote"),
+            2,
+        )
+        .function(guarded(paged_insert_note), js_string!("insertNote"), 3)
+        .function(guarded(paged_edit_note), js_string!("editNote"), 2)
+        .function(guarded(paged_delete_note), js_string!("deleteNote"), 1)
+        .function(
+            guarded(paged_accept_tracked_change),
+            js_string!("acceptTrackedChange"),
+            2,
+        )
+        .function(
+            guarded(paged_reject_tracked_change),
+            js_string!("rejectTrackedChange"),
+            2,
+        )
+        .function(
+            guarded(paged_convert_note_to_text),
+            js_string!("convertNoteToText"),
+            1,
+        )
+        .function(
+            guarded(paged_create_bookmark),
+            js_string!("createBookmark"),
+            2,
+        )
+        .function(
+            guarded(paged_delete_bookmark),
+            js_string!("deleteBookmark"),
+            1,
+        )
+        .function(
+            guarded(paged_rename_bookmark),
+            js_string!("renameBookmark"),
+            2,
+        )
+        .function(guarded(paged_move_bookmark), js_string!("moveBookmark"), 3)
+        .function(
+            guarded(paged_insert_endnote),
+            js_string!("insertEndnote"),
+            3,
+        )
+        .function(
+            guarded(paged_delete_endnote),
+            js_string!("deleteEndnote"),
+            1,
+        )
+        .function(
+            guarded(paged_convert_footnote_to_endnote),
+            js_string!("convertFootnoteToEndnote"),
             2,
         )
         // layer attributes
@@ -3040,6 +3099,29 @@ fn paged_update_table_of_contents(
     Ok(apply_bool(&Mutation::UpdateTableOfContents { story_id }))
 }
 
+/// `paged.generateIndex(storyId)` — Generate Index
+/// (`Mutation::GenerateIndex`, ADR 168): write the document's index into
+/// a story, replacing its text.
+fn paged_generate_index(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::GenerateIndex { story_id }))
+}
+
+/// `paged.updateCrossReferences(sourceId?)` — Update Cross-References
+/// (`Mutation::UpdateCrossReferences`, ADR 169): one source by its id, or
+/// every one.
+fn paged_update_cross_references(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let source_id = opt_string(args.get_or_undefined(0), ctx);
+    Ok(apply_bool(&Mutation::UpdateCrossReferences { source_id }))
+}
+
 /// `paged.insertFootnote(storyId, offset, text)` — insert a footnote at
 /// story char `offset` (`Mutation::InsertFootnote`, ADR 163): its
 /// reference there, and the note, its number and separator then `text`.
@@ -3092,6 +3174,283 @@ fn paged_delete_footnote(
         story_id,
         footnote_id,
     }))
+}
+
+/// `paged.insertNote(storyId, offset, text, user?, date?)` — insert an
+/// editorial note at story char `offset` (`Mutation::InsertNote`, ADR
+/// 172): its place there, one character that prints nothing, and its
+/// text (paragraphs separated by `\r`). Returns the new note's id, or
+/// `null` when the insert was refused. The read side is
+/// `paged.collection("notes")`.
+fn paged_insert_note(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let text = opt_string(args.get_or_undefined(2), ctx).unwrap_or_default();
+    let user = opt_string(args.get_or_undefined(3), ctx);
+    let date = opt_string(args.get_or_undefined(4), ctx);
+    let ids = |m: &paged_canvas::CanvasModel| -> Vec<String> {
+        m.notes().into_iter().map(|n| n.id).collect()
+    };
+    let minted = with_model(|m| {
+        let before = ids(m);
+        m.apply_mutation(&Mutation::InsertNote {
+            story_id,
+            offset,
+            paragraph: None,
+            text,
+            user,
+            date,
+        })
+        .ok()?;
+        ids(m).into_iter().find(|id| !before.contains(id))
+    });
+    Ok(minted.map_or(JsValue::null(), |id| JsValue::from(js_string!(id))))
+}
+
+/// `paged.editNote(noteId, text, date?)` — rewrite a note's text
+/// (`Mutation::EditNote`, ADR 172); `date` becomes its modification date.
+fn paged_edit_note(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let note_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let text = opt_string(args.get_or_undefined(1), ctx).unwrap_or_default();
+    let date = opt_string(args.get_or_undefined(2), ctx);
+    Ok(apply_bool(&Mutation::EditNote {
+        note_id,
+        text,
+        date,
+    }))
+}
+
+/// `paged.deleteNote(noteId)` — delete a note and its place
+/// (`Mutation::DeleteNote`, ADR 172).
+fn paged_delete_note(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let note_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteNote { note_id }))
+}
+
+/// `paged.acceptTrackedChange(storyId, offset)` — accept the tracked
+/// deletion at a story offset, as `paged.collection("trackedChanges")`
+/// lists it (`Mutation::AcceptTrackedChange`, D-01).
+fn paged_accept_tracked_change(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::AcceptTrackedChange {
+        story_id,
+        offset,
+    }))
+}
+
+/// `paged.rejectTrackedChange(storyId, offset)` — reject the tracked
+/// deletion at a story offset: its text comes back
+/// (`Mutation::RejectTrackedChange`, D-01).
+fn paged_reject_tracked_change(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    Ok(apply_bool(&Mutation::RejectTrackedChange {
+        story_id,
+        offset,
+    }))
+}
+
+/// `paged.convertNoteToText(noteId)` — Convert to Text
+/// (`Mutation::ConvertNoteToText`, ADR 172): the note's place becomes a
+/// space and its text.
+fn paged_convert_note_to_text(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let note_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::ConvertNoteToText { note_id }))
+}
+
+/// `paged.createBookmark(name, { page?, destination?, parent?, index? })` —
+/// New Bookmark (`Mutation::CreateBookmark`, ADR 173): to a page (its
+/// `Self` id) or an existing destination, under a bookmark or at the top
+/// level. Returns the new bookmark's id, or `null` when it was refused. The
+/// read side is `paged.collection("bookmarks")`.
+fn paged_create_bookmark(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    #[derive(Default, serde::Deserialize)]
+    #[serde(default)]
+    struct Spec {
+        page: Option<String>,
+        destination: Option<String>,
+        parent: Option<String>,
+        index: Option<u32>,
+    }
+    let name = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let spec = from_js::<Spec>(args.get_or_undefined(1), ctx).unwrap_or_default();
+    let ids = |m: &paged_canvas::CanvasModel| -> Vec<String> {
+        m.bookmarks().into_iter().map(|b| b.self_id).collect()
+    };
+    let minted = with_model(|m| {
+        let before = ids(m);
+        m.apply_mutation(&Mutation::CreateBookmark {
+            name,
+            page: spec.page.map(PageId),
+            destination: spec.destination,
+            parent: spec.parent,
+            index: spec.index,
+        })
+        .ok()?;
+        ids(m).into_iter().find(|id| !before.contains(id))
+    });
+    Ok(minted.map_or(JsValue::null(), |id| JsValue::from(js_string!(id))))
+}
+
+/// `paged.deleteBookmark(bookmarkId)` — delete a bookmark and the
+/// bookmarks under it (`Mutation::DeleteBookmark`, ADR 173).
+fn paged_delete_bookmark(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let bookmark_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteBookmark { bookmark_id }))
+}
+
+/// `paged.renameBookmark(bookmarkId, name)` — rename a bookmark
+/// (`Mutation::RenameBookmark`, ADR 173).
+fn paged_rename_bookmark(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let bookmark_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let name = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::RenameBookmark { bookmark_id, name }))
+}
+
+/// `paged.moveBookmark(bookmarkId, parentId?, index?)` — move a bookmark
+/// and the bookmarks under it (`Mutation::MoveBookmark`, ADR 173): under
+/// a bookmark (the top level for `null`), at an index among its children
+/// (the end when absent).
+fn paged_move_bookmark(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let bookmark_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let parent = opt_string(args.get_or_undefined(1), ctx);
+    let index = match args.get_or_undefined(2) {
+        v if v.is_undefined() || v.is_null() => None,
+        v => Some(v.to_number(ctx)? as u32),
+    };
+    Ok(apply_bool(&Mutation::MoveBookmark {
+        bookmark_id,
+        parent,
+        index,
+    }))
+}
+
+/// The endnote ids `m` lists, in reference order.
+fn endnote_ids(m: &paged_canvas::CanvasModel) -> Vec<String> {
+    m.endnotes().into_iter().map(|e| e.id).collect()
+}
+
+/// `paged.insertEndnote(storyId, offset, text)` — insert an endnote at
+/// story char `offset` (`Mutation::InsertEndnote`, ADR 174): its reference
+/// there and its range in the endnote story, which the first endnote makes
+/// on a page of its own. Returns the new endnote's id, or `null` when the
+/// insert was refused. The read side is `paged.collection("endnotes")`.
+fn paged_insert_endnote(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let text = opt_string(args.get_or_undefined(2), ctx).unwrap_or_default();
+    let minted = with_model(|m| {
+        let before = endnote_ids(m);
+        m.apply_mutation(&Mutation::InsertEndnote {
+            story_id,
+            offset,
+            paragraph: None,
+            text,
+        })
+        .ok()?;
+        endnote_ids(m).into_iter().find(|id| !before.contains(id))
+    });
+    Ok(minted.map_or(JsValue::null(), |id| JsValue::from(js_string!(id))))
+}
+
+/// `paged.deleteEndnote(endnoteId)` — delete an endnote, its reference and
+/// its range (`Mutation::DeleteEndnote`, ADR 174).
+fn paged_delete_endnote(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let endnote_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteEndnote { endnote_id }))
+}
+
+/// `paged.convertFootnoteToEndnote(storyId, footnoteId)` — the footnote
+/// becomes an endnote of its text at its reference's place
+/// (`Mutation::ConvertFootnoteToEndnote`, ADR 174). Returns the endnote's
+/// id, or `null` when refused.
+fn paged_convert_footnote_to_endnote(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let footnote_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let minted = with_model(|m| {
+        let before = endnote_ids(m);
+        m.apply_mutation(&Mutation::ConvertFootnoteToEndnote {
+            story_id,
+            footnote_id,
+        })
+        .ok()?;
+        endnote_ids(m).into_iter().find(|id| !before.contains(id))
+    });
+    Ok(minted.map_or(JsValue::null(), |id| JsValue::from(js_string!(id))))
 }
 
 // ---------------------------------------------------- tables

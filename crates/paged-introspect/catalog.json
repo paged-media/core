@@ -1030,6 +1030,20 @@
       "summary": "Update Table of Contents: rewrite a TOC story (one bound to a TOC style) from its style over the current layout — the title, then one paragraph per heading with its page number. Until then it prints the text it holds."
     },
     {
+      "name": "paged.generateIndex",
+      "params": "(storyId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Generate Index: write the document's index into a story (replacing its text) from its topics and page references over the current layout — the title, a heading per letter, each topic with its pages and See references. Index styles the document lacks are created."
+    },
+    {
+      "name": "paged.updateCrossReferences",
+      "params": "(sourceId?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Update Cross-References: rewrite a cross-reference's text (every one's without an id) from its format and its destination paragraph; the page number is always live."
+    },
+    {
       "name": "paged.insertFootnote",
       "params": "(storyId, offset, text)",
       "returns": "string|null",
@@ -1042,6 +1056,97 @@
       "returns": "bool",
       "kind": "author",
       "summary": "Delete a footnote: its reference and its note. Undo puts both back as they were."
+    },
+    {
+      "name": "paged.insertNote",
+      "params": "(storyId, offset, text, user?, date?)",
+      "returns": "string|null",
+      "kind": "author",
+      "summary": "Insert an editorial note at a story offset: its place there (one character that prints nothing) and its text, paragraphs separated by \\r; user and date are what it records as its author and dates. Returns the note's id; read the notes with paged.collection(\"notes\")."
+    },
+    {
+      "name": "paged.editNote",
+      "params": "(noteId, text, date?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Rewrite an editorial note's text; date becomes its modification date."
+    },
+    {
+      "name": "paged.deleteNote",
+      "params": "(noteId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete an editorial note and its place in the text. Undo puts it back as it was."
+    },
+    {
+      "name": "paged.acceptTrackedChange",
+      "params": "(storyId, offset)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Accept a tracked deletion at its story offset (paged.collection(\"trackedChanges\")): the text stays deleted. Undoable."
+    },
+    {
+      "name": "paged.rejectTrackedChange",
+      "params": "(storyId, offset)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Reject a tracked deletion at its story offset: its text comes back where it stood, as InDesign rejects one. Undoable."
+    },
+    {
+      "name": "paged.convertNoteToText",
+      "params": "(noteId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Convert to Text: an editorial note's place becomes a space and the note's text, its paragraphs the story's."
+    },
+    {
+      "name": "paged.createBookmark",
+      "params": "(name, {page?, destination?, parent?, index?})",
+      "returns": "string|null",
+      "kind": "author",
+      "summary": "New Bookmark: to a page (through a page destination of its own) or an existing destination, under a bookmark or at the top level, at an index among its siblings. Returns the bookmark's id; read them with paged.collection(\"bookmarks\")."
+    },
+    {
+      "name": "paged.deleteBookmark",
+      "params": "(bookmarkId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a bookmark and the bookmarks under it, and the page destinations nothing else goes to. Undo puts them back."
+    },
+    {
+      "name": "paged.renameBookmark",
+      "params": "(bookmarkId, name)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Rename a bookmark."
+    },
+    {
+      "name": "paged.insertEndnote",
+      "params": "(storyId, offset, text)",
+      "returns": "string|null",
+      "kind": "author",
+      "summary": "Insert an endnote at a story offset: its reference there and its range in the endnote story, after the note before it, as InDesign writes one. The first endnote makes the endnote story on a page of its own. Returns the endnote's id; read them with paged.collection(\"endnotes\")."
+    },
+    {
+      "name": "paged.deleteEndnote",
+      "params": "(endnoteId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete an endnote: its reference and its range. Undo puts both back as they were."
+    },
+    {
+      "name": "paged.convertFootnoteToEndnote",
+      "params": "(storyId, footnoteId)",
+      "returns": "string|null",
+      "kind": "author",
+      "summary": "Convert a footnote to an endnote: the footnote goes and an endnote of its text takes its reference's place. Returns the endnote's id."
+    },
+    {
+      "name": "paged.moveBookmark",
+      "params": "(bookmarkId, parentId?, index?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Move a bookmark with the bookmarks under it: under another bookmark (the top level for null), at an index among its siblings."
     },
     {
       "name": "paged.layerSetVisible",
@@ -1491,6 +1596,8 @@
     "cellRightEdgeStrokeColor",
     "cellRightEdgeStrokeWeight",
     "cellRightEdgeStrokeTint",
+    "rowStartRow",
+    "rowKeepWithNext",
     "pluginMetadata",
     "anchoredPosition",
     "anchorPoint",
@@ -1579,6 +1686,21 @@
     "deleteHyperlink",
     "editHyperlink",
     "updateTableOfContents",
+    "generateIndex",
+    "updateCrossReferences",
+    "insertNote",
+    "editNote",
+    "deleteNote",
+    "acceptTrackedChange",
+    "rejectTrackedChange",
+    "convertNoteToText",
+    "createBookmark",
+    "deleteBookmark",
+    "renameBookmark",
+    "moveBookmark",
+    "insertEndnote",
+    "deleteEndnote",
+    "convertFootnoteToEndnote",
     "setFieldValue",
     "placeImage",
     "replaceImageBytes",
@@ -6572,6 +6694,52 @@
         {
           "element": "Cell",
           "attribute": "RightEdgeStrokeTint",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "cell",
+      "path": "rowStartRow",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Anywhere",
+          "NextColumn",
+          "NextFrame",
+          "NextPage",
+          "NextOddPage",
+          "NextEvenPage"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Anywhere",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "Row",
+          "attribute": "StartRow",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "cell",
+      "path": "rowKeepWithNext",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "Row",
+          "attribute": "KeepWithNextRow",
           "kind": "attr"
         }
       ]

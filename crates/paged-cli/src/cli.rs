@@ -105,6 +105,30 @@ pub enum Command {
         #[command(flatten)]
         assets: DocumentOptions,
     },
+    /// Collect the document, its linked files and its fonts into one
+    /// folder (InDesign's File ▸ Package).
+    ///
+    /// Writes `<name>.idml` with its links pointed into `Links/`, copies
+    /// every linked file there, copies the faces of each used family
+    /// from those given with `--fonts` / `--font-family` / `--font` into
+    /// `Document fonts/` (a face whose licence restricts copying is
+    /// listed, not copied), and writes `Instructions.txt` and
+    /// `<name> Report.txt`. OUT must not exist or be empty.
+    Package {
+        /// IDML or `.paged` document.
+        doc: PathBuf,
+        /// The package folder.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Text for `Instructions.txt`, instead of the default note.
+        #[arg(long)]
+        instructions: Option<String>,
+        /// Print the report as JSON instead of text.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
     /// Mint a blank document.
     New {
         /// letter | legal | tabloid | a3 | a4 | a5, or WxH in points.

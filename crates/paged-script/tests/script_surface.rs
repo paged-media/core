@@ -155,12 +155,17 @@ fn every_reason_is_a_reason() {
 /// The bridge's own count, so the headline number in the module doc
 /// cannot drift from the code without a failure.
 #[test]
-fn the_script_surface_reaches_134_of_135() {
-    // 134 of 135: v73 added insertFootnote and deleteFootnote (ADR 163),
-    // deleteHyperlink and editHyperlink (ADR 164), updateTableOfContents
-    // (ADR 165).
-    assert_eq!(ops_the_bridge_names().len(), 134);
-    assert_eq!(paged_wire::MUTATION_NAMES.len(), 135);
+fn the_script_surface_reaches_149_of_150() {
+    // 144 of 145: v0.71.13 added insertFootnote and deleteFootnote (ADR
+    // 163), deleteHyperlink and editHyperlink (ADR 164) and
+    // updateTableOfContents (ADR 165); v72 generateIndex (ADR 168),
+    // updateCrossReferences (ADR 169), insertNote, editNote, deleteNote and
+    // convertNoteToText (ADR 172), and createBookmark, deleteBookmark,
+    // renameBookmark and moveBookmark (ADR 173); v73 insertEndnote,
+    // deleteEndnote and convertFootnoteToEndnote (ADR 174); v74
+    // acceptTrackedChange and rejectTrackedChange (ADR 184).
+    assert_eq!(ops_the_bridge_names().len(), 149);
+    assert_eq!(paged_wire::MUTATION_NAMES.len(), 150);
 }
 
 /// The names the bridge actually installs, read out of `install_bridge`

@@ -1,0 +1,11 @@
+{
+ "built": {
+  "log": [],
+  "made": "button:2,mso:4,textbox,checkbox"
+ },
+ "read_back": {
+  "probe": "button Go:2, mso Slides:4, textboxes:1, checkboxes:1, mover:200 250 260 380",
+  "moved": "button Go:2, mso Slides:4, textboxes:1, checkboxes:1, mover:215 265 275 395",
+  "moved3": "button Go:2, mso Slides:4, textboxes:1, checkboxes:1, mover:215 265 275 395"
+ }
+}

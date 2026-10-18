@@ -25,7 +25,7 @@
 //!   * **index markers** — two `<PageReference TopicName="…">` markers
 //!     inside the body story (one referencing a `<Topic>` by name, one
 //!     by `AppliedTopic`). `Document::resolve_index` groups them by topic
-//!     and `build_index_paragraphs` emits the index story.
+//!     and Generate Index (`index_paragraphs`) writes the index story.
 //!   * **bookmarks** — two `<Bookmark>` anchors pointing at hyperlink
 //!     text destinations (round-trip for the editor's Bookmarks panel).
 //!   * a **cross-reference** — a `<CrossReferenceSource>` span whose

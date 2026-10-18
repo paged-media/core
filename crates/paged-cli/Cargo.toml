@@ -41,7 +41,7 @@ paged-fidelity = { path = "../paged-fidelity" }
 paged-gen = { path = "../paged-gen" }
 # Reads the declared `CMYKProfile` off a package's designmap BEFORE the
 # load that has to be told about it. Same rev as paged-canvas pins.
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "63346fd13766fcc03d4468c027996709c0fd088c" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "05c57195d9a7514357cede90d89d987141bf01d8" }
 clap = { version = "4", features = ["derive"] }
 # `paged mcp` and `paged library`: the repository (ADR 180) and the MCP surface.
 paged-repo = { path = "../paged-repo" }
@@ -53,6 +53,8 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 serde_json = "1"
+# `package_folder` reads the packaged IDML back.
+zip = { workspace = true }
 
 [lints]
 workspace = true

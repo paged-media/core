@@ -25,6 +25,11 @@
 //! * `footnote-split`: `NoSplitting` false — InDesign may split the note
 //!   between the two frames.
 //! * `footnote-nosplit`: `NoSplitting` true.
+//! * `footnote-keeps`: no long note. Paragraph 2 carries a note and
+//!   keeps with the next two lines; paragraph 3 keeps all its lines
+//!   together and does not fit under it in frame 1, so both move to
+//!   frame 2. Asks where the note of a reference a keep moves on goes,
+//!   and whether frame 1 still keeps room for it (C-45).
 
 use crate::builders::{
     designmap::{write_designmap, DesignMap},
@@ -55,16 +60,42 @@ const DOM_VERSION: (&str, &str) = ("DOMVersion", "20.0");
 pub struct Variant {
     pub sample: &'static str,
     pub no_splitting: bool,
+    /// Frame 2's width: [`FRAME_W`], or narrower to ask where a note's
+    /// continuation goes when the next frame sets it at another measure.
+    pub frame_2_w: f32,
+    /// The keep-options story ([`keep_paragraphs`]) instead of
+    /// [`paragraphs`].
+    pub keeps: bool,
 }
 
 pub const SPLIT: Variant = Variant {
     sample: "footnote-split",
     no_splitting: false,
+    frame_2_w: FRAME_W,
+    keeps: false,
 };
 
 pub const NOSPLIT: Variant = Variant {
     sample: "footnote-nosplit",
     no_splitting: true,
+    frame_2_w: FRAME_W,
+    keeps: false,
+};
+
+/// The split note continues in a frame 300 pt wide (ADR 178).
+pub const SPLIT_NARROW: Variant = Variant {
+    sample: "footnote-split-narrow",
+    no_splitting: false,
+    frame_2_w: 300.0,
+    keeps: false,
+};
+
+/// A keep moves a reference line, and its note, on to frame 2 (C-45).
+pub const KEEPS: Variant = Variant {
+    sample: "footnote-keeps",
+    no_splitting: false,
+    frame_2_w: FRAME_W,
+    keeps: true,
 };
 
 /// Numbered sentences, so every line reads differently in the PDF.
@@ -82,6 +113,59 @@ pub fn paragraphs() -> Vec<(String, String)> {
         (sentences("P2", 5), "N2 is a short note.".to_string()),
         (sentences("P3", 5), "N3 is a short note.".to_string()),
     ]
+}
+
+/// One paragraph of a story: its text, its note, and the paragraph
+/// attributes it carries.
+pub struct Para {
+    pub text: String,
+    pub note: Option<String>,
+    pub attrs: Vec<(&'static str, &'static str)>,
+}
+
+/// The `footnote-keeps` story: P1 fills most of frame 1; P2 carries N2
+/// and keeps with the next 2 lines; P3 keeps all its lines together and
+/// is too tall for what frame 1 has left; P4 carries N4.
+pub fn keep_paragraphs() -> Vec<Para> {
+    vec![
+        Para {
+            text: sentences("P1", 20),
+            note: None,
+            attrs: vec![],
+        },
+        Para {
+            text: sentences("P2", 2),
+            note: Some("N2 is the note a keep moves on.".to_string()),
+            attrs: vec![("KeepWithNext", "2")],
+        },
+        Para {
+            text: sentences("P3", 10),
+            note: None,
+            attrs: vec![
+                ("KeepLinesTogether", "true"),
+                ("KeepAllLinesTogether", "true"),
+            ],
+        },
+        Para {
+            text: sentences("P4", 3),
+            note: Some("N4 is a short note.".to_string()),
+            attrs: vec![],
+        },
+    ]
+}
+
+fn story_paragraphs(v: &Variant) -> Vec<Para> {
+    if v.keeps {
+        return keep_paragraphs();
+    }
+    paragraphs()
+        .into_iter()
+        .map(|(text, note)| Para {
+            text,
+            note: Some(note),
+            attrs: vec![],
+        })
+        .collect()
 }
 
 pub fn story_id(sample: &str) -> String {
@@ -107,32 +191,34 @@ fn footnote(b: &mut XmlBuilder, id: String, text: &str) {
     b.end("Footnote");
 }
 
-fn story_xml(sample: &str) -> Vec<u8> {
+fn story_xml(v: &Variant) -> Vec<u8> {
+    let sample = v.sample;
     let id = story_id(sample);
-    let paragraphs = paragraphs();
+    let paragraphs = story_paragraphs(v);
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start("idPkg:Story", &[PKG_NS, DOM_VERSION]);
     b.start("Story", &[("Self", id.as_str())]);
     let last = paragraphs.len() - 1;
-    for (pi, (text, note)) in paragraphs.iter().enumerate() {
-        b.start(
-            "ParagraphStyleRange",
-            &[
-                (
-                    "AppliedParagraphStyle",
-                    "ParagraphStyle/$ID/[No paragraph style]",
-                ),
-                ("Hyphenation", "false"),
-                ("SpaceAfter", "6"),
-            ],
-        );
+    for (pi, para) in paragraphs.iter().enumerate() {
+        let mut attrs = vec![
+            (
+                "AppliedParagraphStyle",
+                "ParagraphStyle/$ID/[No paragraph style]",
+            ),
+            ("Hyphenation", "false"),
+            ("SpaceAfter", "6"),
+        ];
+        attrs.extend(para.attrs.iter().copied());
+        b.start("ParagraphStyleRange", &attrs);
         start_range(&mut b, &[], "10");
-        content(&mut b, text);
+        content(&mut b, &para.text);
         b.end("CharacterStyleRange");
-        start_range(&mut b, &[("Position", "Superscript")], "10");
-        footnote(&mut b, self_id(sample, "Footnote", pi as u32), note);
-        b.end("CharacterStyleRange");
+        if let Some(note) = &para.note {
+            start_range(&mut b, &[("Position", "Superscript")], "10");
+            footnote(&mut b, self_id(sample, "Footnote", pi as u32), note);
+            b.end("CharacterStyleRange");
+        }
         if pi < last {
             start_range(&mut b, &[], "10");
             b.empty("Br", &[]);
@@ -187,13 +273,13 @@ fn preferences_xml(v: &Variant) -> Vec<u8> {
 fn frame(
     id: String,
     story: String,
-    at: (f32, f32, f32),
+    (at, width_pt): ((f32, f32, f32), f32),
     prev: Option<String>,
     next: Option<String>,
 ) -> PageItem {
     Rect {
         self_id: id,
-        width_pt: FRAME_W,
+        width_pt,
         height_pt: at.2,
         item_transform: translate(at.0, at.1),
         fill_color: None,
@@ -225,8 +311,14 @@ pub fn build(v: &Variant) -> Sample {
     let f1 = self_id(s, "Frame", 1);
     let f2 = self_id(s, "Frame", 2);
     let items = vec![
-        frame(f1.clone(), story_id(s), FRAME_1, None, Some(f2.clone())),
-        frame(f2, story_id(s), FRAME_2, Some(f1), None),
+        frame(
+            f1.clone(),
+            story_id(s),
+            (FRAME_1, FRAME_W),
+            None,
+            Some(f2.clone()),
+        ),
+        frame(f2, story_id(s), (FRAME_2, v.frame_2_w), Some(f1), None),
     ];
     let master_id = self_id(s, "MasterSpread", 0);
     let spread_id = self_id(s, "Spread", 0);
@@ -268,6 +360,6 @@ pub fn build(v: &Variant) -> Sample {
             }),
         )],
         spreads: vec![(spread_id, spread)],
-        stories: vec![(story_id(s), story_xml(s))],
+        stories: vec![(story_id(s), story_xml(v))],
     }
 }

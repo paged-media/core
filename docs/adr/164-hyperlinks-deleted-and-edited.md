@@ -2,7 +2,7 @@
 
 - **Status:** Accepted 2026-10-16.
 - **Scope:**
-  - `paged-wire`: `Mutation::DeleteHyperlink`, `Mutation::EditHyperlink` (protocol 73).
+  - `paged-wire`: `Mutation::DeleteHyperlink`, `Mutation::EditHyperlink` (`v0.71.13`, on protocol 71).
   - `paged-mutate`: `Operation::DeleteHyperlink`, `Operation::EditHyperlink` and the inverse-only
     `Operation::RestoreHyperlink` (`apply::hyperlink_edit`).
   - `paged-script`: `paged.deleteHyperlink`, `paged.editHyperlink`.

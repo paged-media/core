@@ -21,6 +21,18 @@
       "rationale": "Dense small text: nine frames of 8 pt on 10 pt, glyph-edge antialiasing (see text-wrap). The rules themselves carry 1.8 % of the page's difference (pixel columns at each rule, Metal 0.373). Measured on lavapipe (CI, 2026-10-15); sized at worst x 1.20."
     },
     {
+      "name": "footnote-split-narrow",
+      "worst_mean_de": 0.31,
+      "measured": 0.259,
+      "rationale": "Dense small text, as footnote-split: a note continued in a narrower frame (ADR 178), glyph-edge antialiasing. Measured on lavapipe (CI, 2026-10-17); sized at worst x 1.20."
+    },
+    {
+      "name": "footnote-keeps",
+      "worst_mean_de": 0.31,
+      "measured": 0.26,
+      "rationale": "Dense small text, as footnote-split, footnote-nosplit and footnote-split-narrow (each measured 0.26 on lavapipe): the same page and faces with the keep-options story (C-45). Budget taken from those siblings; confirm against this fixture's own lavapipe measurement."
+    },
+    {
       "name": "footnote-split",
       "worst_mean_de": 0.31,
       "measured": 0.26,

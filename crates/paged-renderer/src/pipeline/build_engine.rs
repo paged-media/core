@@ -779,6 +779,9 @@ pub(super) fn build_document_inner(
             entries.sort();
             entries.hash(&mut h);
         }
+        let mut xref: Vec<(&String, &usize)> = p.xref_page.iter().collect();
+        xref.sort();
+        xref.hash(&mut h);
         h.finish()
     });
 
@@ -1047,6 +1050,10 @@ pub(super) fn build_document_inner(
     // the emit passes only on the second (post-layout) build. `None` on
     // the first pass — running headers then keep their baked value.
     let running_header_index: Option<&links::RunningHeaderIndex> = post.map(|p| &p.running_headers);
+    // ADR 169 — the cross-references' destination pages, on the same pass.
+    let xref_page_index: Option<&HashMap<String, usize>> = post.map(|p| &p.xref_page);
+    // ADR 170 — every endnote's number, once per build.
+    let endnote_ordinals: HashMap<String, u32> = document.endnote_ordinals();
 
     // Per-page (URI → ImageId) cache so multiple rectangles on the
     // same page sharing an image share a single ImageId in the
@@ -2602,6 +2609,12 @@ pub(super) fn build_document_inner(
         if let Some(index) = running_header_index {
             emitter = emitter.with_running_headers(index);
         }
+        if let Some(pages) = xref_page_index {
+            emitter = emitter.with_xref_pages(pages);
+        }
+        if !endnote_ordinals.is_empty() {
+            emitter = emitter.with_endnote_ordinals(&endnote_ordinals);
+        }
         for paragraph in &parsed.story.paragraphs {
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
@@ -3351,6 +3364,12 @@ pub(super) fn build_document_inner(
             if let Some(index) = running_header_index {
                 emitter = emitter.with_running_headers(index);
             }
+            if let Some(pages) = xref_page_index {
+                emitter = emitter.with_xref_pages(pages);
+            }
+            if !endnote_ordinals.is_empty() {
+                emitter = emitter.with_endnote_ordinals(&endnote_ordinals);
+            }
             // W1.22 — thread the cross-story numbering ledger when one
             // exists (only built for documents with a continue-across-
             // stories list).
@@ -3926,6 +3945,39 @@ pub(super) fn build_document_inner(
         })
         .collect();
 
+    let mut structure_roles = std::collections::BTreeMap::new();
+    let structure_names = if options.collect_glyph_runs {
+        document
+            .stories
+            .iter()
+            .map(|s| {
+                s.story
+                    .paragraphs
+                    .iter()
+                    .map(|p| {
+                        let id = p
+                            .paragraph_style
+                            .as_deref()
+                            .unwrap_or("ParagraphStyle/$ID/[No paragraph style]");
+                        let def = document.styles.paragraph_styles.get(id);
+                        let name = def
+                            .and_then(|d| d.name.as_deref())
+                            .unwrap_or_else(|| id.strip_prefix("ParagraphStyle/").unwrap_or(id));
+                        let name = super::structure_name(name);
+                        let role =
+                            super::structure_role(def.and_then(|d| d.pdf_export_tag.as_deref()));
+                        structure_roles
+                            .entry(name.clone())
+                            .or_insert_with(|| role.to_string());
+                        name
+                    })
+                    .collect()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(BuiltDocument {
         pages,
         stats: total_stats,
@@ -3934,6 +3986,8 @@ pub(super) fn build_document_inner(
         resource_tiles_needed,
         overset,
         paragraph_starts,
+        structure_names,
+        structure_roles,
         grow_passes: 1,
         fresh_pages: fresh,
     })
@@ -4041,13 +4095,47 @@ pub(super) fn substitute_generated_markers(
         cur_idx
     };
     let mut reference = 0u32;
+    // ADR 170 — the k-th endnote reference / number marker of the
+    // paragraph prints the k-th entry's ordinal.
+    let endnote_options = em
+        .document
+        .designmap
+        .endnote_options
+        .clone()
+        .unwrap_or_default();
+    let endnote_label = |id: Option<&str>, reference: bool| -> String {
+        id.and_then(|id| em.endnote_ordinals.and_then(|m| m.get(id)))
+            .map(|n| {
+                if reference {
+                    endnote_options.reference_label(*n)
+                } else {
+                    endnote_options.text_label(*n)
+                }
+            })
+            .unwrap_or_default()
+    };
+    let (mut endnote_ref, mut endnote_num) = (0usize, 0usize);
     for (i, run) in paragraph.runs.iter().enumerate() {
         if !run.text.chars().any(paged_model::is_generated_marker) {
             continue;
         }
         let mut text = String::with_capacity(run.text.len());
         for ch in run.text.chars() {
-            let (printed, kind) = if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
+            let (printed, kind) = if ch == paged_model::ENDNOTE_REFERENCE_MARKER {
+                let id = paragraph
+                    .endnote_references
+                    .get(endnote_ref)
+                    .map(|r| r.self_id.as_str());
+                endnote_ref += 1;
+                (endnote_label(id, true), GeneratedKind::FootnoteNumber)
+            } else if ch == paged_model::ENDNOTE_NUMBER_MARKER {
+                let id = paragraph
+                    .endnote_ranges
+                    .get(endnote_num)
+                    .and_then(|r| r.source.as_deref());
+                endnote_num += 1;
+                (endnote_label(id, false), GeneratedKind::FootnoteNumber)
+            } else if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
                 let waiting = (reference as usize) < em.pending_footnotes.len();
                 let label = if waiting {
                     options.reference_label(em.footnote_ordinal_at(note_page) + 1 + reference)
@@ -4056,6 +4144,13 @@ pub(super) fn substitute_generated_markers(
                 };
                 reference += 1;
                 (label, GeneratedKind::FootnoteNumber)
+            } else if ch == paged_model::NOTE_MARKER {
+                // ADR 172 — an editorial note prints nothing.
+                (String::new(), GeneratedKind::Note)
+            } else if ch == paged_model::TRACKED_DELETION_MARKER {
+                // D-01 — deleted text prints nothing: InDesign prints a
+                // story as if every change were accepted.
+                (String::new(), GeneratedKind::TrackedDeletion)
             } else if ch == paged_model::SECTION_MARKER {
                 (page(ch), GeneratedKind::SectionMarker)
             } else if paged_model::is_page_marker(ch) {
@@ -4226,6 +4321,7 @@ pub(super) fn capture_footnotes(
             first_line: 0,
             end_line: None,
             continued: false,
+            resume_at: None,
             ref_baseline_pt,
         });
     }
@@ -4558,6 +4654,9 @@ pub(super) struct StoryEmitter<'a> {
     /// every pushed `BreakRecord`. Empty string when collection isn't
     /// enabled.
     pub(super) current_story_id: String,
+    /// The story's ordinal in document order, its tagged-PDF structure
+    /// key's first half (ADR 182).
+    pub(super) story_ordinal: u32,
     /// Track 2: monotonically incremented as `emit_paragraph` fires.
     /// Resets to 0 per emitter (i.e. per story).
     pub(super) paragraph_idx: u32,
@@ -4614,6 +4713,12 @@ pub(super) struct StoryEmitter<'a> {
     /// value; populated for the re-emit so they resolve to the matching
     /// on-page paragraph. Owned by the build.
     pub(super) running_headers: Option<&'a links::RunningHeaderIndex>,
+    /// ADR 169 — cross-reference source → its destination's flat page
+    /// index, on the post-layout pass; `None` on the first, where an
+    /// `XRefPageNumber` keeps its stored value.
+    pub(super) xref_pages: Option<&'a HashMap<String, usize>>,
+    /// ADR 170 — every endnote's ordinal by its `<Endnote>` `Self`.
+    pub(super) endnote_ordinals: Option<&'a HashMap<String, u32>>,
     /// The auto-size fit found InDesign composes NOTHING in this chain
     /// (a `WidthOnly` fit stalled on a `NextColumnTextWrap` obstacle —
     /// see `auto_size`): every line is treated as not fitting, so the
@@ -4835,6 +4940,7 @@ impl<'a> StoryEmitter<'a> {
             footnote_scope: None,
             breaks: Vec::new(),
             current_story_id: String::new(),
+            story_ordinal: 0,
             paragraph_idx: 0,
             diagnostics: Vec::new(),
             overset_reported: false,
@@ -4843,6 +4949,8 @@ impl<'a> StoryEmitter<'a> {
             page_index_map: None,
             page_numbering: links::PageNumbering::empty(),
             running_headers: None,
+            xref_pages: None,
+            endnote_ordinals: None,
             force_overset: false,
             start_rule: paged_model::StartParagraph::Anywhere,
             span_starts: HashMap::new(),
@@ -4890,6 +4998,19 @@ impl<'a> StoryEmitter<'a> {
         self
     }
 
+    /// ADR 170 — wire the endnotes' ordinals.
+    pub(super) fn with_endnote_ordinals(mut self, ordinals: &'a HashMap<String, u32>) -> Self {
+        self.endnote_ordinals = Some(ordinals);
+        self
+    }
+
+    /// ADR 169 — wire the cross-references' destination pages. Set only
+    /// on the re-emit pass.
+    pub(super) fn with_xref_pages(mut self, pages: &'a HashMap<String, usize>) -> Self {
+        self.xref_pages = Some(pages);
+        self
+    }
+
     /// W1.4 — resolve a hyperlink destination target id (a `<Page>`
     /// self id, or a story / text-anchor id) to a flat body-page index.
     /// Only page ids resolve in v1; story / text-anchor ids fall through
@@ -4900,7 +5021,25 @@ impl<'a> StoryEmitter<'a> {
 
     pub(super) fn with_story_id(mut self, story_id: &str) -> Self {
         self.current_story_id = story_id.to_string();
+        self.story_ordinal = self
+            .document
+            .stories
+            .iter()
+            .position(|s| s.self_id == story_id)
+            .unwrap_or(usize::MAX) as u32;
         self
+    }
+
+    /// ADR 182 — the paragraph the next glyphs belong to, for a tagged
+    /// PDF's structure; set on `list`'s glyph capture (a no-op when the
+    /// build captures none) and cleared with `None`.
+    pub(super) fn tag_glyphs(&self, list: &mut DisplayList, on: bool) {
+        if let Some(runs) = list.glyph_runs.as_mut() {
+            runs.current = on.then_some(paged_compose::StructKey {
+                story: self.story_ordinal,
+                paragraph: self.paragraph_idx,
+            });
+        }
     }
 
     /// W1.22 — wire the document-level numbering ledger so
@@ -4990,6 +5129,75 @@ impl<'a> StoryEmitter<'a> {
     /// `i`'s text bottom so the footnote pool drawn underneath does
     /// not overlap the body. A shorter/empty slice is padded with
     /// zeros; entries past the chain length are ignored.
+    /// The measure of chain region `k` (ADR 179): the span plan's when
+    /// there is one, the head region's column width (its wrap shrink
+    /// included) for the first, else the region's own inner width. A
+    /// story threads frames of different widths, and InDesign sets each
+    /// frame's lines at its own measure (`chain-widths`).
+    pub(super) fn region_measure_pt(&self, k: usize) -> Option<f32> {
+        if let Some(&w) = self.region_widths.get(k) {
+            return Some(w);
+        }
+        if k == 0 || self.options.fallback_column_width_pt.is_some() {
+            return self.column_width_pt;
+        }
+        let f = self.chain.get(k)?;
+        let [_, left, _, right] = f.inset_spacing.unwrap_or([0.0; 4]);
+        Some((f.bounds.width() - left - right).max(0.0))
+    }
+
+    /// ADR 179 — per-line measures for a paragraph that may run on into
+    /// regions of other widths: as many lines as its current region holds
+    /// below the first baseline (above the text area's bottom and its
+    /// footnote reservation) at that region's measure, then each next
+    /// region's lines at its own. InDesign keeps a frame's lines and sets
+    /// the rest of the paragraph at the next frame's measure from the
+    /// line that moves there (`chain-widths`). `None` when every region
+    /// from here on has the current measure: the scalar width serves.
+    pub(super) fn chain_line_measures(
+        &self,
+        lopts: &paged_text::LayoutOptions,
+        indents_pt: f32,
+        paragraph_size: f32,
+    ) -> Option<Vec<i32>> {
+        let here = self.region_measure_pt(self.frame_idx)?;
+        if (self.frame_idx..self.chain.len())
+            .filter_map(|k| self.region_measure_pt(k))
+            .all(|w| (w - here).abs() < 0.25)
+        {
+            return None;
+        }
+        let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+        let leading = lopts.leading_override.unwrap_or(lopts.line_height).max(1);
+        let mut widths: Vec<i32> = Vec::new();
+        for k in self.frame_idx..self.chain.len() {
+            let frame = self.chain[k];
+            let bottom = to_64(frame.bounds.height() - inset_bottom(frame))
+                - self.reserved_footnote_64.get(k).copied().unwrap_or(0);
+            // The current region's lines start at the paragraph's first
+            // baseline; a next region's about its first line's ascent
+            // below its top inset (a prediction: only the lines past it
+            // depend on it).
+            let first = if k == self.frame_idx {
+                lopts.first_baseline
+            } else {
+                to_64(frame.inset_spacing.map_or(0.0, |i| i[0]) + paragraph_size * 0.8)
+            };
+            let lines = if first > bottom {
+                0
+            } else {
+                ((bottom - first) / leading + 1) as usize
+            };
+            let measure = to_64((self.region_measure_pt(k)? - indents_pt).max(1.0));
+            widths.extend(std::iter::repeat_n(measure, lines.min(512)));
+            if widths.len() >= 512 {
+                break;
+            }
+        }
+        // Past the chain the composer repeats the last entry.
+        (!widths.is_empty()).then_some(widths)
+    }
+
     pub(super) fn with_footnote_reservation(mut self, reserved: &[i32]) -> Self {
         for (slot, &r) in self.reserved_footnote_64.iter_mut().zip(reserved.iter()) {
             *slot = r.max(0);
@@ -5808,55 +6016,136 @@ impl<'a> StoryEmitter<'a> {
     }
 }
 
-/// Phase 5 — build a synthetic `Paragraph` sequence for an index
-/// story. Walks `Document::resolve_index()` and emits one paragraph
-/// per topic:
+/// The paragraphs Generate Index writes, as InDesign 20.0.1 writes them
+/// (`index-probe`, ADR 168), from `options` (`<IndexOptions>`, InDesign's
+/// defaults where absent) over `entries`
+/// ([`paged_scene::Document::resolve_index_tree_on`]):
 ///
-///   "Apple\t12, 23, 41"
-///   "Banana\t7"
-///
-/// Each paragraph carries the topic text, a tab separator (the IDML
-/// `^t` convention; renderer's tab-stop pass snaps it to the next
-/// tab stop), then a comma-separated string of page labels resolved
-/// from `page_labels`. Page-label resolution mirrors `build_toc_paragraphs`
-/// so Section overrides (Roman numerals etc.) flow through.
-///
-/// Returns an empty vec when the document has no markers.
-///
-/// Today the renderer doesn't yet trigger this automatically — there's
-/// no frame attribute that says "this is the index host" the way
-/// `AppliedTOCStyle` triggers the TOC swap-in. Callers that want to
-/// emit a generated index point this at a target story and overwrite
-/// its paragraphs.
-pub fn build_index_paragraphs(
-    document: &Document,
+/// - the `Title` (`Index`) in the `TitleStyle`;
+/// - with section headings on (the default), the first letter of each
+///   group of level 1 topics in the section heading style, empty groups
+///   left out (a topic not starting with a letter goes under `Symbols`);
+/// - one paragraph per topic in its level's style: the topic, then its
+///   pages behind the following-topic separator (two spaces), joined by
+///   the between-page-numbers separator (`, `), each in the page number
+///   style; then each cross-reference behind its separator (`. `): the
+///   reference's words (`See`, `See also`, …) in the cross-reference
+///   style, a no-break space, and the topic it names in the
+///   cross-reference topic style; then the entry-end separator.
+pub fn index_paragraphs(
+    options: Option<&paged_model::IndexOptions>,
+    entries: Vec<paged_scene::IndexTreeEntry>,
     page_labels: &[String],
 ) -> Vec<paged_model::Paragraph> {
-    let entries = document.resolve_index();
-    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let mut text = entry.topic.clone();
-        if !entry.pages.is_empty() {
-            // Resolve page indices to labels. Missing labels
-            // (out-of-bounds — shouldn't happen, defensive) skip.
-            let labels: Vec<String> = entry
-                .pages
-                .iter()
-                .filter_map(|i| page_labels.get(*i).cloned())
-                .collect();
-            if !labels.is_empty() {
-                text.push('\t');
-                text.push_str(&labels.join(", "));
+    let default = paged_model::IndexOptions::default();
+    let o = options.unwrap_or(&default);
+    let style = |s: &Option<String>, fallback: &str| -> Option<String> {
+        let s = s.clone().unwrap_or_else(|| fallback.to_string());
+        (!s.ends_with("[No paragraph style]") && !s.ends_with("[No character style]")).then_some(s)
+    };
+    let text = |s: &Option<String>, fallback: &str| -> String {
+        expand_toc_specials(s.as_deref().unwrap_or(fallback))
+    };
+    let run = |text: String, style: Option<String>| paged_model::CharacterRun {
+        text,
+        character_style: style,
+        ..paged_model::CharacterRun::default()
+    };
+    let para = |style: Option<String>, runs: Vec<paged_model::CharacterRun>| {
+        let mut merged: Vec<paged_model::CharacterRun> = Vec::with_capacity(runs.len());
+        for r in runs.into_iter().filter(|r| !r.text.is_empty()) {
+            match merged.last_mut() {
+                Some(last) if last.character_style == r.character_style => {
+                    last.text.push_str(&r.text)
+                }
+                _ => merged.push(r),
             }
         }
-        let run = paged_model::CharacterRun {
-            text,
-            ..paged_model::CharacterRun::default()
-        };
-        out.push(paged_model::Paragraph {
-            runs: vec![run],
+        paged_model::Paragraph {
+            paragraph_style: style,
+            runs: merged,
             ..paged_model::Paragraph::default()
-        });
+        }
+    };
+    let following = text(&o.following_topic_separator, "  ");
+    let between = text(&o.between_page_numbers_separator, ", ");
+    let before_xref = text(&o.before_cross_reference_separator, ". ");
+    let entry_end = text(&o.entry_end_separator, "");
+    let number_style = style(
+        &o.page_number_style,
+        "CharacterStyle/$ID/[No character style]",
+    );
+    let xref_style = style(
+        &o.cross_reference_style,
+        "CharacterStyle/$ID/Index Cross-reference",
+    );
+    let xref_topic_style = style(
+        &o.cross_reference_topic_style,
+        "CharacterStyle/$ID/[No character style]",
+    );
+
+    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len() + 8);
+    let title = o.title.clone().unwrap_or_else(|| "Index".to_string());
+    if !title.is_empty() {
+        out.push(para(
+            style(&o.title_style, "ParagraphStyle/$ID/Index Title"),
+            vec![run(title, None)],
+        ));
+    }
+    let headings = o.include_section_headings.unwrap_or(true);
+    let mut section: Option<String> = None;
+    for e in entries {
+        if headings && e.level == 1 {
+            let first = e
+                .sort_key
+                .chars()
+                .next()
+                .filter(|c| c.is_alphabetic())
+                .map(|c| c.to_uppercase().collect::<String>())
+                .unwrap_or_else(|| "Symbols".to_string());
+            if section.as_deref() != Some(first.as_str()) {
+                out.push(para(
+                    style(
+                        &o.section_heading_style,
+                        "ParagraphStyle/$ID/Index Section Head",
+                    ),
+                    vec![run(first.clone(), None)],
+                ));
+                section = Some(first);
+            }
+        }
+        let level = (e.level.clamp(1, 4) - 1) as usize;
+        let level_style = style(
+            &o.level_styles[level],
+            &format!("ParagraphStyle/$ID/Index Level {}", level + 1),
+        );
+        let mut runs = vec![run(e.topic, None)];
+        let labels: Vec<String> = e
+            .pages
+            .iter()
+            .filter_map(|p| page_labels.get(*p).cloned())
+            .collect();
+        for (n, label) in labels.into_iter().enumerate() {
+            let sep = if n == 0 { &following } else { &between };
+            runs.push(run(sep.clone(), None));
+            runs.push(run(label, number_style.clone()));
+        }
+        for x in e.cross_references {
+            let words = match x.kind.as_str() {
+                "SeeAlso" => "See also".to_string(),
+                "SeeHerein" => "See herein".to_string(),
+                "SeeAlsoHerein" => "See also herein".to_string(),
+                "SeeOrAlsoBracket" => "See [also]".to_string(),
+                k if k.starts_with("Custom") => x.custom.clone().unwrap_or_default(),
+                _ => "See".to_string(),
+            };
+            runs.push(run(before_xref.clone(), None));
+            runs.push(run(words, xref_style.clone()));
+            runs.push(run("\u{00A0}".to_string(), None));
+            runs.push(run(x.target, xref_topic_style.clone()));
+        }
+        runs.push(run(entry_end.clone(), None));
+        out.push(para(level_style, runs));
     }
     out
 }
@@ -6575,6 +6864,14 @@ fn emit_paragraph_lines(
         // re-emit) running headers pick up the matching paragraph on this
         // very page.
         let host_page = em.chain_pages.get(em.frame_idx).copied().unwrap_or(0);
+        let caption_link = paragraph
+            .runs
+            .iter()
+            .filter_map(|r| r.text_variable.as_deref())
+            .any(|v| links::is_live_caption(&em.document.designmap, v))
+            .then(|| em.chain.get(em.frame_idx))
+            .flatten()
+            .and_then(|frame| links::caption_link(em.document, frame));
         let ctx = links::VarResolveCtx {
             designmap: &em.document.designmap,
             total_pages,
@@ -6583,14 +6880,23 @@ fn emit_paragraph_lines(
             numbering: em.page_numbering,
             page_index: host_page,
             running_headers: em.running_headers,
+            caption_link,
         };
         paragraph
             .runs
             .iter()
             .map(|r| {
-                r.text_variable
-                    .as_deref()
-                    .and_then(|var_id| links::resolve_variable(&ctx, var_id, &r.text))
+                let var_id = r.text_variable.as_deref()?;
+                // ADR 169 — a cross-reference's page number is its
+                // destination's page, live (InDesign prints it so before
+                // any Update Cross-References).
+                let xref = em
+                    .xref_pages
+                    .zip(r.hyperlink_source.as_deref())
+                    .filter(|_| links::is_xref_page_number(&em.document.designmap, var_id))
+                    .and_then(|(pages, src)| pages.get(src))
+                    .and_then(|page| em.page_labels.get(*page).cloned());
+                xref.or_else(|| links::resolve_variable(&ctx, var_id, &r.text))
             })
             .collect()
     } else {
@@ -6791,12 +7097,7 @@ fn emit_paragraph_lines(
         .get(head_run)
         .map(|r| r.point_size)
         .unwrap_or(12.0);
-    let Some(full_col_pt) = em
-        .region_widths
-        .get(em.frame_idx)
-        .copied()
-        .or(em.column_width_pt)
-    else {
+    let Some(full_col_pt) = em.region_measure_pt(em.frame_idx) else {
         return;
     };
     // FINDING #7.2 — LeftIndent / RightIndent narrow the composed
@@ -7169,6 +7470,12 @@ fn emit_paragraph_lines(
         no_room: plan_no_room,
         first_baseline_push_pt,
     } = build_perline_wrap_widths(em, styled_runs_ref, &mut lopts, frame_first_paragraph);
+    // ADR 179 — a chain of frames of different widths, which the wrap
+    // plan leaves to the scalar measure.
+    if lopts.compose.column_widths.is_none() {
+        lopts.compose.column_widths =
+            em.chain_line_measures(&lopts, left_indent_pt + right_indent_pt, paragraph_size);
+    }
 
     // A shaped frame whose top is too narrow to start on moves its
     // first baseline down; the widths above were already built from
@@ -7733,18 +8040,11 @@ fn emit_paragraph_lines(
             left_indent_pt,
             resolved_paragraph.first_line_indent.unwrap_or(0.0),
         );
-        let paragraph_text: String = paragraph
-            .runs
-            .iter()
-            .enumerate()
-            .map(|(i, r)| {
-                if i == 0 {
-                    list_first_text.as_deref().unwrap_or(&r.text)
-                } else {
-                    &r.text
-                }
-            })
-            .collect();
+        // The text as shaped: the cluster offsets index it. Built from the
+        // model's runs it drifted wherever a generated number replaced its
+        // marker character (an endnote's `iv` for a 3-byte marker put the
+        // next tab one character late, ADR 170).
+        let paragraph_text: String = styled_runs_ref.iter().map(|r| r.text).collect();
         // Pre-build the leader context once per paragraph so each
         // `\t` snap that has a non-empty `<TabStop Leader="...">` can
         // shape the leader with the run that owns the tab.
@@ -8695,6 +8995,7 @@ fn emit_paragraph_lines(
             // story pass completes; the glyphs themselves emit at
             // BlendMode::Normal so the group composite is the single
             // place the IDML BlendingSetting takes effect.
+            em.tag_glyphs(&mut pages[target_page].list, true);
             emit_glyph_slice(
                 slice,
                 em.font_table.font_ref(fid),
@@ -8722,6 +9023,7 @@ fn emit_paragraph_lines(
                     &mut pages[target_page].list,
                 );
             }
+            em.tag_glyphs(&mut pages[target_page].list, false);
             start = end;
         }
         emit_line_decorations(
@@ -9074,6 +9376,7 @@ fn emit_paragraph_lines(
         }
         let outliner = TtfOutliner::new(&cap_outline);
         let before_cap_cmds = pages[target_page].list.commands.len();
+        em.tag_glyphs(&mut pages[target_page].list, true);
         emit_glyph_slice(
             &positioned,
             em.font_table.font_ref(cap_font_id),
@@ -9098,6 +9401,7 @@ fn emit_paragraph_lines(
                 &mut pages[target_page].list,
             );
         }
+        em.tag_glyphs(&mut pages[target_page].list, false);
         let after_cap_cmds = pages[target_page].list.commands.len();
         // Track the drop-cap glyphs against the same frame range so
         // any later transparency / vertical-justification pass

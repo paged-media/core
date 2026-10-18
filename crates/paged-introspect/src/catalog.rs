@@ -450,10 +450,40 @@ fn host_functions() -> Vec<HostFn> {
            "Rename a hyperlink or send it to a new URL or page (pageId wins); an empty name clears it."),
         f!("paged.updateTableOfContents", "(storyId)", "bool", "author",
            "Update Table of Contents: rewrite a TOC story (one bound to a TOC style) from its style over the current layout — the title, then one paragraph per heading with its page number. Until then it prints the text it holds."),
+        f!("paged.generateIndex", "(storyId)", "bool", "author",
+           "Generate Index: write the document's index into a story (replacing its text) from its topics and page references over the current layout — the title, a heading per letter, each topic with its pages and See references. Index styles the document lacks are created."),
+        f!("paged.updateCrossReferences", "(sourceId?)", "bool", "author",
+           "Update Cross-References: rewrite a cross-reference's text (every one's without an id) from its format and its destination paragraph; the page number is always live."),
         f!("paged.insertFootnote", "(storyId, offset, text)", "string|null", "author",
            "Insert a footnote at a story offset: its reference there, and the note (its number, the separator, then text). Returns the note's id; read the notes with paged.collection(\"footnotes\")."),
         f!("paged.deleteFootnote", "(storyId, footnoteId)", "bool", "author",
            "Delete a footnote: its reference and its note. Undo puts both back as they were."),
+        f!("paged.insertNote", "(storyId, offset, text, user?, date?)", "string|null", "author",
+           "Insert an editorial note at a story offset: its place there (one character that prints nothing) and its text, paragraphs separated by \\r; user and date are what it records as its author and dates. Returns the note's id; read the notes with paged.collection(\"notes\")."),
+        f!("paged.editNote", "(noteId, text, date?)", "bool", "author",
+           "Rewrite an editorial note's text; date becomes its modification date."),
+        f!("paged.deleteNote", "(noteId)", "bool", "author",
+           "Delete an editorial note and its place in the text. Undo puts it back as it was."),
+        f!("paged.acceptTrackedChange", "(storyId, offset)", "bool", "author",
+           "Accept a tracked deletion at its story offset (paged.collection(\"trackedChanges\")): the text stays deleted. Undoable."),
+        f!("paged.rejectTrackedChange", "(storyId, offset)", "bool", "author",
+           "Reject a tracked deletion at its story offset: its text comes back where it stood, as InDesign rejects one. Undoable."),
+        f!("paged.convertNoteToText", "(noteId)", "bool", "author",
+           "Convert to Text: an editorial note's place becomes a space and the note's text, its paragraphs the story's."),
+        f!("paged.createBookmark", "(name, {page?, destination?, parent?, index?})", "string|null", "author",
+           "New Bookmark: to a page (through a page destination of its own) or an existing destination, under a bookmark or at the top level, at an index among its siblings. Returns the bookmark's id; read them with paged.collection(\"bookmarks\")."),
+        f!("paged.deleteBookmark", "(bookmarkId)", "bool", "author",
+           "Delete a bookmark and the bookmarks under it, and the page destinations nothing else goes to. Undo puts them back."),
+        f!("paged.renameBookmark", "(bookmarkId, name)", "bool", "author",
+           "Rename a bookmark."),
+        f!("paged.insertEndnote", "(storyId, offset, text)", "string|null", "author",
+           "Insert an endnote at a story offset: its reference there and its range in the endnote story, after the note before it, as InDesign writes one. The first endnote makes the endnote story on a page of its own. Returns the endnote's id; read them with paged.collection(\"endnotes\")."),
+        f!("paged.deleteEndnote", "(endnoteId)", "bool", "author",
+           "Delete an endnote: its reference and its range. Undo puts both back as they were."),
+        f!("paged.convertFootnoteToEndnote", "(storyId, footnoteId)", "string|null", "author",
+           "Convert a footnote to an endnote: the footnote goes and an endnote of its text takes its reference's place. Returns the endnote's id."),
+        f!("paged.moveBookmark", "(bookmarkId, parentId?, index?)", "bool", "author",
+           "Move a bookmark with the bookmarks under it: under another bookmark (the top level for null), at an index among its siblings."),
         // --- layer attributes ---
         f!("paged.layerSetVisible", "(layerId, visible)", "bool", "write", "Show or hide a layer."),
         f!("paged.layerSetLocked", "(layerId, locked)", "bool", "write", "Lock or unlock a layer."),
@@ -823,6 +853,9 @@ property_paths! {
         CellRightEdgeStrokeColor => "cellRightEdgeStrokeColor" : color().idml(idml![attr(Cell | CellStyle, RightEdgeStrokeColor)]),
         CellRightEdgeStrokeWeight => "cellRightEdgeStrokeWeight" : length_pos().idml(idml![attr(Cell | CellStyle, RightEdgeStrokeWeight)]),
         CellRightEdgeStrokeTint => "cellRightEdgeStrokeTint" : pct().default_num(100.0).idml(idml![attr(Cell, RightEdgeStrokeTint)]),
+        // ADR 175 — a row's own options, written through any of its cells.
+        RowStartRow => "rowStartRow" : enum_(START_PARAGRAPH).default_text("Anywhere").idml(idml![attr(Row, StartRow)]),
+        RowKeepWithNext => "rowKeepWithNext" : bool_().default_bool(false).idml(idml![attr(Row, KeepWithNextRow)]),
         PluginMetadata => "pluginMetadata" : structure("PluginMetadata", Wire::PluginMetadata).required(),
         AnchoredPosition => "anchoredPosition" : enum_open(ANCHORED_POSITIONS).default_text("InlinePosition").idml(idml![attr(AnchoredObjectSetting, AnchoredPosition)]),
         AnchorPoint => "anchorPoint" : enum_open(REFERENCE_POINTS).idml(idml![attr(AnchoredObjectSetting, AnchorPoint)]),
@@ -1339,7 +1372,10 @@ mod tests {
         //
         // 239 -> 241: ADR 158 — a paragraph's level in a multi-level list
         // and whether its restart policy applies.
-        assert_eq!(cat.settable_paths.len(), 241, "settable path count drifted");
+        //
+        // 241 -> 243: ADR 175 — a table row's start rule and its keep with
+        // the next row, written through any cell of the row.
+        assert_eq!(cat.settable_paths.len(), 243, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

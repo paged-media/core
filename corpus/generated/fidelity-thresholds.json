@@ -367,11 +367,11 @@
       "name": "tables",
       "text_gate": "lines",
       "max_pages_with_pdf": 13,
-      "max_mean_de": 0.215,
+      "max_mean_de": 0.134,
       "max_p99_de": 3.0,
-      "min_ssim": 0.982,
-      "max_ink_mean_de": 47.995,
-      "rationale": "Re-baselined 2026-09-07 after four table fixes: paged-gen writes MinimumHeight/AutoGrow so InDesign lays out the declared row heights; a cell edge with no declared stroke draws InDesign's default 1pt black; and a table's content is inset half its outer border, as InDesign keeps that border inside the frame. Reference re-exported from the changed IDML; all 13 pages gated (was 7). Worst page mean 0.219 / p99 2.457 / SSIM 0.9878 - tightened from 1.1/13.0/0.96, which had made this the loosest fixture in the corpus. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.186 / p99 2.457 / ssim 0.9905 (was 0.219 / 2.457 / 0.9878); re-sized by the rule above. RE-EXPORTED 2026-10-02 (tables-rows): paged-gen now writes a cell's paragraph marks (<Br/>), so InDesign reads p7's and p12's multi-paragraph cells as several paragraphs instead of one run-on line; with the cell row fix p7 went mean 0.076 -> 0.021 and p12 0.126 -> 0.055. The worst page (p2, nested table, mean 0.186 / p99 2.457 / SSIM 0.9905) is unchanged, so the thresholds stay. INK GATED 2026-10-13: worst page ink mean 39.995 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
+      "min_ssim": 0.988,
+      "max_ink_mean_de": 20.0,
+      "rationale": "Re-baselined 2026-09-07 after four table fixes: paged-gen writes MinimumHeight/AutoGrow so InDesign lays out the declared row heights; a cell edge with no declared stroke draws InDesign's default 1pt black; and a table's content is inset half its outer border, as InDesign keeps that border inside the frame. Reference re-exported from the changed IDML; all 13 pages gated (was 7). Worst page mean 0.219 / p99 2.457 / SSIM 0.9878 - tightened from 1.1/13.0/0.96, which had made this the loosest fixture in the corpus. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.186 / p99 2.457 / ssim 0.9905 (was 0.219 / 2.457 / 0.9878); re-sized by the rule above. RE-EXPORTED 2026-10-02 (tables-rows): paged-gen now writes a cell's paragraph marks (<Br/>), so InDesign reads p7's and p12's multi-paragraph cells as several paragraphs instead of one run-on line; with the cell row fix p7 went mean 0.076 -> 0.021 and p12 0.126 -> 0.055. The worst page (p2, nested table, mean 0.186 / p99 2.457 / SSIM 0.9905) is unchanged, so the thresholds stay. INK GATED 2026-10-13: worst page ink mean 39.995 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-17 (ADR 176: a nested table drawn as any table is, with its strokes, fills and spans and its columns at their declared widths): p2, the nested table, 0.186 -> 0.014; worst page now p11 mean 0.112 / p99 2.574 / ssim 0.9938 (p13) / ink 16.663; mean, ssim and ink re-sized by the rule above, p99 kept (worst * 1.20 would loosen it)."
     },
     {
       "name": "tables-overset",
@@ -682,6 +682,36 @@
       "rationale": "Added 2026-10-12 (Wave 1 R-06): where a table cell sets its first baseline, asked of InDesign 20.0.1. Page 1: a row per FirstBaselineOffset (Ascent, Cap, X, Leading, Embox, Fixed min 30, Ascent min 30, Cap min 30, Embox in Lora) x top inset {0, 6} x VerticalJustification {Top, Center}, written on the <Cell>, Open Sans / Lora 20 pt, and three em-box/ascent text frames below. Page 2 is the same table with the policy from a <CellStyle>: InDesign sets it identically, but plugin-publish's idml-import does not read a CellStyle's FirstBaselineOffset, so page 2 (mean 1.078) is not gated until that half lands. origin/main's engine (every cell on its ascent; em box = point size): page 1 mean 1.140 / p99 65.829 / SSIM 0.9532. With the cell's policy, the minimum as a floor and the em box at (cap height + 1 em) / 2: 0.147 / 2.961 / 0.9960, every cell within 0.05 pt of InDesign's DOM; sized at worst x 1.20 and SSIM - 0.005. The residue is glyph anti-aliasing. INK GATED 2026-10-13: worst page ink mean 3.520 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. PAGE 2 GATED 2026-10-14: the policy from a cell style — InDesign keeps FirstBaselineOffset / MinimumFirstBaselineOffset on the <CellStyle>, which the reader now takes (plugin-publish) and cells fall back to: p2 1.074 -> 0.129 (ink 26.3 -> 3.2). Both pages now gated; the page-1 budget already covers p2's 0.129 / p99 2.69 / ssim 0.9961 / ink 3.46."
     },
     {
+      "name": "table-start-row",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 36,
+      "max_mean_de": 0.141,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.985,
+      "max_ink_mean_de": 78.934,
+      "rationale": "Added 2026-10-17 (ADR 175): a table row's Start Row option, asked of InDesign 20.0.1. Nine cases, each one story holding one table of 20 pt rows (each grows to 20.826 pt with its Open Sans 12 label), threaded through the start-paragraph fixture's four-page chain (a two-column frame and a one-column frame on page 1, one frame on each of pages 2-4), every case starting on an odd page: R04 Anywhere / NextColumn / NextFrame / NextPage / NextOddPage / NextEvenPage, NextPage on the story's first row, NextColumn on a row that already opens column two, and a header over a row moved to the next frame. InDesign moves the row and every row after it as it moves a paragraph's first line (StartParagraph), leaves the first row and the row already opening column two where they are, and repeats the header in the target frame; the engine matches every row (table_start_row_pipeline pins each to its frame, from table-start-row-probe with PROBE_IN). Before (the attribute was not read): worst page mean 0.433 / p99 0.0 / ssim 0.9719, and the text gate failed on pages 13-22. With the rule: 0.117 / 0.0 / 0.9902, ink 65.778; sized at worst * 1.20, the p99 at the 0.3 floor, ssim - 0.005, ink worst + ~20%. The text gate is hard: 86 lines on 13 pages match."
+    },
+    {
+      "name": "table-nested",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 6,
+      "max_mean_de": 0.055,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.992,
+      "max_ink_mean_de": 3.033,
+      "rationale": "Added 2026-10-17 (ADR 176): a table nested in a table cell, asked of InDesign 20.0.1. One case per page, a one-cell host table 300 pt wide holding the nested table above a plain host row: a plain 3 x 3 (default strokes), a column span and a row span, cell fills and per-edge strokes (3 pt red, 2 pt blue), a header row, columns narrower than the cell, and columns wider than it (400 pt in 300). InDesign sets a nested table as any table, with its strokes, fills and spans, and keeps its declared column widths past the cell's edge. The engine drew nested tables through a reduced path (a 0.5 pt placeholder grid, no fills, strokes or spans, columns scaled to the cell): worst page mean 0.751 / p99 49.0 / ssim 0.9642. Drawn by the table emitter itself at a fixed origin: 0.045 / 0.0 / 0.9978, ink 2.528 (table_nested_pipeline pins the host row and column offsets to InDesign's PDF). Sized at worst * 1.20, the p99 at the 0.3 floor, ssim - 0.005, ink worst + ~20%. The text gate is hard: 62 lines on 6 pages match."
+    },
+    {
+      "name": "table-fit",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 6,
+      "max_mean_de": 0.01,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9949,
+      "max_ink_mean_de": 1.416,
+      "rationale": "Added 2026-10-17 (ADR 177): how many table rows a frame holds at the edge, asked of InDesign 20.0.1 (table-fit-probe, then this fixture opened with PROBE_IN). Six pages, each a frame threaded to a second one, holding eight fixed 20 pt rows with 1 pt strokes: a plain frame of 120.9 and 121 pt, a 4 pt bottom inset at 124.9 and 125 pt, a 1 pt centred frame stroke at 121.9 and 122 pt. InDesign sets 5, 6, 5, 6, 5, 6 rows in the first frame: a frame holds its rows when its text area (above its bottom inset, inside its stroke's share) holds them and half the strokes above and below them. The engine measured against the whole frame and left out the stroke under the last row: worst page mean 0.069 / ssim 0.9968 (6 rows in the 120.9, 124.9 and 121.9 pt frames). With the rule: 0.008 / 0.0 / 0.9999, ink 1.18; table_fit_pipeline counts each frame's rows. Sized at worst * 1.20 (rounded up), the p99 at the 0.3 floor, ssim - 0.005, ink worst + ~20%. The text gate is hard: 54 lines on 6 pages match."
+    },
+    {
       "name": "table-cell-tints",
       "text_gate": "lines",
       "max_pages_with_pdf": 1,
@@ -909,6 +939,36 @@
       "rationale": "Added 2026-10-15 (L-01d, ADR 160): where InDesign sets the footnotes of a frame with columns, asked of InDesign 20.0.1. One A4 page of Inter 10 pt, notes 8 pt: frame A (two columns, six paragraphs, the fourth starting the second column) and frame B (two columns, four paragraphs) below it, which overrides the document's footnote layout with FootnotesEnableOverrides. InDesign sets a frame's notes under each column at the column's width, or, when they span, across the whole frame in reference order under one rule; an override with no spacing of its own puts InDesign's frame default of 6 pt between notes. This variant: the document spans (EnableStraddling true), frame B does not. Page measures mean 0.153, p99 3.43, ssim 0.99426, ink 7.00 (main's engine: 0.672 / 0.957); sized at worst x 1.20, ssim - 0.005. Every note line lies within 0.05 pt of InDesign's; the rest is glyph edges. Text gate on."
     },
     {
+      "name": "chain-widths",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 0.165,
+      "max_p99_de": 4.71,
+      "min_ssim": 0.9932,
+      "max_ink_mean_de": 4.06,
+      "rationale": "Added 2026-10-17 (ADR 179): a story threaded through frames of different widths, asked of InDesign 20.0.1. Page 1: frames of 400, 250 and 400 pt, one under the other, Inter 10/12 pt; the first paragraph runs from the wide frame into the narrow one, the second from the narrow one into the wide one, the third starts in the last. Page 2: frames of 250 and 400 pt, one paragraph across them. InDesign keeps a frame's lines and sets the rest of the paragraph at the next frame's measure from the line that moves there. The engine set every line of the story at the head frame's measure: p1 mean 1.497 / p99 66.94 / ssim 0.919, p2 0.530 / 11.32 / 0.972. With each region's measure and per-line measures across the boundary: p1 0.137 / 3.92 / 0.9982, p2 0.065 / 1.78 / 0.999, ink 3.38; sized at worst * 1.20, ssim - 0.005, ink worst + ~20%. The text gate is hard: 35 lines on 2 pages match."
+    },
+    {
+      "name": "footnote-split-narrow",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.335,
+      "max_p99_de": 9.77,
+      "min_ssim": 0.99,
+      "max_ink_mean_de": 4.72,
+      "rationale": "Added 2026-10-17 (ADRs 178, 179): footnote-split with frame 2 at 300 pt instead of 420, asked of InDesign 20.0.1. InDesign continues the split note exactly after the hyphenated 'ordi-' of its last kept line and recomposes the rest at 300 pt; the body text in frame 2 is set at 300 pt too. The engine continued the note by line count (losing what the wider composition no longer had) and set frame 2's body at 420 pt: mean 1.224 / p99 49.21 / ssim 0.944. With the continuation resumed at its text position and each frame's measure: 0.279 / 8.14 / 0.995, ink 3.93 (footnote-split itself measures 0.285); sized at worst * 1.20, ssim - 0.005, ink worst + ~20%. Text gate on."
+    },
+    {
+      "name": "footnote-keeps",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.226,
+      "max_p99_de": 6.96,
+      "min_ssim": 0.993,
+      "max_ink_mean_de": 4.22,
+      "rationale": "Added 2026-10-18 (C-45): a keep that moves a reference line on, asked of InDesign 20.0.1. The footnote-split page and frames; P2 carries note 1 and keeps with the next 2 lines, P3 keeps all its lines together (KeepLinesTogether + KeepAllLinesTogether) and does not fit under P2 in frame 1. InDesign moves P3 to frame 2 with P2's last line, sets note 1 at frame 2's foot with note 2, and keeps no room for it in frame 1; the engine does the same. Page measures mean 0.188, p99 5.79, ssim 0.99799, ink 3.51; sized at worst x 1.20, ssim - 0.005. Text gate on."
+    },
+    {
       "name": "footnote-split",
       "text_gate": true,
       "max_pages_with_pdf": 1,
@@ -937,6 +997,46 @@
       "min_ssim": 0.9907,
       "max_ink_mean_de": 14.17,
       "rationale": "Added 2026-10-16 (R-08, L-04, ADR 165): a table of contents that is out of date, asked of InDesign 20.0.1. Four 400 x 300 pt pages, Inter: a body story threaded over pages 1-3 with headings at three levels, and on page 4 a TOC story bound to TOCStyle/Contents (InDesign's spelling) whose stored entries are stale (a renamed heading, a wrong page). InDesign prints the stored entries (Contents / Getting Started 7 / An Old Heading 8), and so does the engine: no entry is rebuilt at render. Page measures mean 0.155, p99 1.20, ssim 0.9957, ink 11.80 (pages 1-2: 16 pt heading glyph edges; every line at InDesign's rows and extents); sized at worst x 1.20, ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "index",
+      "text_gate": true,
+      "max_pages_with_pdf": 4,
+      "max_mean_de": 0.016,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9949,
+      "max_ink_mean_de": 3.16,
+      "rationale": "Added 2026-10-16 (ADR 168): an index to generate, asked of InDesign 20.0.1. Four 400 x 300 pt pages, Inter: a body story threaded over pages 1-3 with page references to nested topics in InDesign's spelling (ReferencedTopic, each in a range of its own), and on page 4 a story with a stale index (Index / Apples 9). InDesign prints the stored text, and so does the engine. Page measures mean 0.0131, p99 0, ssim 0.9999, ink 2.63; sized at worst x 1.20 (p99 at its 0.3 floor), ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "xref",
+      "text_gate": true,
+      "max_pages_with_pdf": 3,
+      "max_mean_de": 0.0502,
+      "max_p99_de": 0.762,
+      "min_ssim": 0.9947,
+      "max_ink_mean_de": 5.53,
+      "rationale": "Added 2026-10-16 (ADR 169): cross-references that are out of date, asked of InDesign 20.0.1. Three 400 x 300 pt pages, Inter: page 1 holds one reference per English default format to a numbered heading on page 2 and one to a text anchor there, each source's text stale (Old Heading, a page-number variable storing 9). InDesign prints the stored text but the live page number (page 2), and so does the engine (the XRefPageNumber is resolved from the destination's laid-out page). Page measures mean 0.0418, p99 0.635, ssim 0.9997, ink 4.60; sized at worst x 1.20, ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "endnotes",
+      "text_gate": true,
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 0.041,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9947,
+      "max_ink_mean_de": 4.0,
+      "rationale": "Added 2026-10-16 (ADR 170): endnotes as InDesign writes them, asked of InDesign 20.0.1. Two 400 x 300 pt pages, Inter: three <Endnote> references on page 1, the endnote story (IsEndnoteStory) in an <EndnoteTextFrame> on page 2, numbering from 3 in lower roman. InDesign prints iii, iv, v at the references and the notes, and so does the engine (main's engine printed no number and placed no endnote story). Page measures mean 0.0341, p99 0, ssim 0.9997, ink 3.33; sized at worst x 1.20 (p99 at its 0.3 floor), ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "notes",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.0418,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9944,
+      "max_ink_mean_de": 3.35,
+      "rationale": "Added 2026-10-16 (ADR 172): editorial notes as InDesign writes them, asked of InDesign 20.0.1 (notes-probe; with PROBE_IN InDesign reads all four of the sample's notes, at story offsets 15, 26, 57 and 74). One 400 x 300 pt page, Inter: two paragraphs holding four <Note>s, one inside a word, one between words, one of two paragraphs, one ending the story. InDesign prints none of them, and neither does the engine (a note is one character of the text that prints nothing). Page measures mean 0.0348, p99 0, ssim 0.9994, ink 2.79; sized at worst x 1.20 (p99 at its 0.3 floor), ssim - 0.005. Text gate on."
     }
   ]
 }

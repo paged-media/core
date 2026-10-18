@@ -2326,15 +2326,10 @@ fn multiple_conditions_any_visible_keeps() {
 // ── Phase 5 renderer — index paragraph builder ────────────────
 
 #[test]
-fn nested_table_inside_cell_emits_grid_commands() {
-    // Outer 1×1 table whose single cell hosts a nested 2×2 table.
-    // After build, the page's display list must contain enough
-    // rectangle commands to draw the inner table's grid (5
-    // horizontal + 3 vertical = 8 lines, plus the outer table's
-    // 4 borders = 4) plus glyph emission for inner cell text.
-    // A pre-fix build would skip the nested table entirely; we
-    // detect the fix by asserting the inner cell's text glyphs
-    // are present.
+fn nested_table_inside_cell_prints_its_cells() {
+    // Outer 1×1 table whose single cell hosts a nested 2×2 table. A
+    // build that skipped the nested table would print neither inner
+    // cell's text; the table emitter draws it (ADR 176), so both do.
     use std::io::Write;
     use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -2420,24 +2415,17 @@ fn nested_table_inside_cell_emits_grid_commands() {
     .expect("Inter.ttf fixture");
     let options = PipelineOptions {
         font: Some(&font_bytes),
+        collect_glyph_runs: true,
         ..PipelineOptions::default()
     };
     let built = build_document(&doc, &options).expect("build");
-    // The inner cells contribute commands to the page's display
-    // list via emit_cell_paragraph called from inside the new
-    // nested-table emit. Count grid-line + glyph commands as a
-    // sanity check that the nested table actually rendered.
-    //
-    // Before the nested-table fix: page would have ~0 commands
-    // (the outer cell paragraph had empty runs + table → silent
-    // skip). After: ≥ 8 grid rects (5 row lines + 3 col lines)
-    // plus inner-cell glyph commands.
-    let cmd_count = built.pages[0].list.commands.len();
-    assert!(
-        cmd_count >= 20,
-        "expected nested-table cmds (≥20 for grid + INNER-A + INNER-B), \
-             got {cmd_count}"
-    );
+    let runs = built.pages[0].list.glyph_runs.as_ref().expect("glyph runs");
+    let mut entries: Vec<_> = runs.entries.iter().collect();
+    entries.sort_by_key(|e| e.command_index);
+    let text: String = entries.iter().filter_map(|e| e.unicode).collect();
+    for cell in ["INNER-A", "INNER-B"] {
+        assert!(text.contains(cell), "{cell} must print; got {text:?}");
+    }
 }
 
 #[test]
@@ -4463,7 +4451,7 @@ fn no_footnote_frame_is_byte_identical() {
 }
 
 #[test]
-fn build_index_paragraphs_emits_topic_tab_pages() {
+fn index_paragraphs_write_indesigns_default_index() {
     // Construct a Document by parsing a small IDML so we exercise
     // the full resolve_index → build path. Reusing the parser
     // here is far cheaper than a hand-rolled Document.
@@ -4517,10 +4505,19 @@ fn build_index_paragraphs_emits_topic_tab_pages() {
     let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
 
     let page_labels = vec!["1".to_string()];
-    let paragraphs = build_index_paragraphs(&doc, &page_labels);
-    assert_eq!(paragraphs.len(), 1);
-    assert_eq!(paragraphs[0].runs.len(), 1);
-    assert_eq!(paragraphs[0].runs[0].text, "Apple\t1");
+    let entries = doc.resolve_index_tree_on(&Default::default());
+    let paragraphs = index_paragraphs(None, entries, &page_labels);
+    let texts: Vec<String> = paragraphs
+        .iter()
+        .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect())
+        .collect();
+    // InDesign's default index (ADR 168): the title, the section's
+    // letter, the topic and its page behind two spaces.
+    assert_eq!(texts, ["Index", "A", "Apple  1"]);
+    assert_eq!(
+        paragraphs[2].paragraph_style.as_deref(),
+        Some("ParagraphStyle/$ID/Index Level 1")
+    );
 }
 
 /// path and decode at native size via `image::load_from_memory`.

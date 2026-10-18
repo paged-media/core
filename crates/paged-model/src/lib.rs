@@ -3968,6 +3968,36 @@ pub struct IndexTopic {
     pub sort_order: Option<String>,
 }
 
+/// IDML `<CrossReferenceFormat>`: what a cross-reference says, as the
+/// building blocks InDesign writes (ADR 169). The blocks' words are the
+/// document's own (InDesign writes its defaults in the UI's language).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CrossReferenceFormat {
+    pub self_id: String,
+    pub name: Option<String>,
+    /// `AppliedCharacterStyle` of the whole reference (`n` for none).
+    pub applied_character_style: Option<String>,
+    pub blocks: Vec<CrossReferenceBlock>,
+}
+
+/// One `<BuildingBlock>` of a [`CrossReferenceFormat`].
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CrossReferenceBlock {
+    /// `BlockType`: `CustomStringBuildingBlock`, `FullParagraphBuildingBlock`,
+    /// `ParagraphTextBuildingBlock`, `ParagraphNumberBuildingBlock`,
+    /// `PageNumberBuildingBlock`, `BookmarkNameBuildingBlock`,
+    /// `PartialParagraphBuildingBlock`, `ChapterNumberBuildingBlock`,
+    /// `FileNameBuildingBlock`.
+    pub block_type: String,
+    /// `CustomText` (`$ID/` for none).
+    pub custom_text: Option<String>,
+    pub applied_character_style: Option<String>,
+    /// `AppliedDelimiter` / `IncludeDelimiter`: where a partial paragraph
+    /// stops.
+    pub applied_delimiter: Option<String>,
+    pub include_delimiter: Option<bool>,
+}
+
 /// IDML `<CrossReference>` under a `<Topic>`: an index entry that sends
 /// the reader to another topic ("Fruit. See Apples").
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -3985,7 +4015,7 @@ pub struct IndexCrossReference {
 }
 
 /// IDML `<IndexOptions>`: how Generate Index writes the index, as
-/// InDesign 20.0.1 spells it (`index-probe`, ADR 166). Every field is the
+/// InDesign 20.0.1 spells it (`index-probe`, ADR 168). Every field is the
 /// attribute's raw value; an absent one reads as InDesign's default.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct IndexOptions {
@@ -4091,6 +4121,11 @@ pub struct TextVariable {
     /// `<FileNameVariablePreference IncludePath="true">`.
     #[serde(default)]
     pub include_path: bool,
+    /// `<CaptionMetadataVariablePreference MetadataProviderName>` of a
+    /// `LiveCaptionType` variable: the link fact the caption prints
+    /// (`$ID/#LinkInfoNameStr` = the linked file's name).
+    #[serde(default)]
+    pub metadata_provider: Option<String>,
 }
 
 /// `<ChapterNumberPreference>` (in `Resources/Preferences.xml`): the
@@ -5855,6 +5890,11 @@ pub struct ParagraphStyleDef {
     /// `EmptyGrepStyles` — see [`Self::empty_nested_styles`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub empty_grep_styles: Option<bool>,
+    /// The PDF tag of the style's export tagging
+    /// (`<StyleExportTagMap ExportType="PDF" ExportTag="H1">`): the
+    /// standard structure type a tagged PDF role-maps the style to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_export_tag: Option<String>,
 }
 /// One line style (`<AllLineStyles>` list item): `AppliedCharacterStyle`
 /// over the next `LineCount` lines of the paragraph.
@@ -6980,6 +7020,23 @@ pub struct Paragraph {
     /// the overwhelming majority of paragraphs (only the paragraphs
     /// that host a `<Footnote>` anchor have entries).
     pub footnotes: Vec<Footnote>,
+    /// The `<Endnote>`s whose references stand in this paragraph, in text
+    /// order: the k-th [`ENDNOTE_REFERENCE_MARKER`] is the k-th (ADR 170).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endnote_references: Vec<EndnoteReference>,
+    /// In an endnote story, the `<EndnoteRange>`s standing in this
+    /// paragraph, in text order: the k-th [`ENDNOTE_NUMBER_MARKER`] prints
+    /// the k-th range's note's number (ADR 170).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endnote_ranges: Vec<EndnoteRangeDef>,
+    /// The editorial `<Note>`s standing in this paragraph (ADR 172), in
+    /// text order: the k-th [`NOTE_MARKER`] is the k-th.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
+    /// D-01 — the tracked deletions standing in this paragraph, in text
+    /// order: the k-th [`TRACKED_DELETION_MARKER`] is the k-th.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tracked_deletions: Vec<TrackedChange>,
     /// Phase 5 — `<Topic>` references on this paragraph from
     /// `<PageReference>` or `<IndexEntry>` markers. Each entry maps
     /// to one place where this paragraph contributes to the index.
@@ -6989,18 +7046,20 @@ pub struct Paragraph {
 }
 impl Paragraph {
     /// Keep the anchors of [`Self::anchored_frame_offsets`], the
-    /// footnotes and the table on their characters across a text edit at
+    /// footnotes, the notes and the table on their characters across a text edit at
     /// character `at`: `delta`
     /// characters inserted (positive; text typed at an anchor goes before
     /// it) or removed (negative; an anchor inside the removed range moves
     /// to its start).
     pub fn shift_anchors(&mut self, at: u32, delta: i64) {
         let footnotes = self.footnotes.iter_mut().filter_map(|f| f.anchor.as_mut());
+        let notes = self.notes.iter_mut().map(|n| &mut n.anchor);
         let table = self.table_anchor.as_mut();
         for offset in self
             .anchored_frame_offsets
             .iter_mut()
             .chain(footnotes)
+            .chain(notes)
             .chain(table)
         {
             if delta >= 0 {
@@ -7114,6 +7173,71 @@ pub struct Footnote {
     /// style cascade just like any other paragraph stream.
     pub paragraphs: Vec<Paragraph>,
 }
+/// A tracked change, InDesign's `<Change>` (D-01; asked of InDesign
+/// 20.0.1, `track-changes-probe`): `<Change ChangeType UserName Date
+/// AppliedDocumentUser>` wrapping the text it inserted, moved or deleted,
+/// inside a character range.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrackedChange {
+    /// `ChangeType`: `InsertedText`, `DeletedText` or `MovedText`.
+    pub change_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_user: Option<String>,
+    /// `Date`, as InDesign spells it (`2026-10-18T05:38:08`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// A deletion's content: the `<Change>` element's children verbatim
+    /// (InDesign nests whole paragraph and character ranges in it), which
+    /// a save writes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_xml: Option<String>,
+    /// A deletion's text, as InDesign's `contents` reads it (paragraphs
+    /// separated by U+000D), for a reviewer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_text: Option<String>,
+}
+
+impl TrackedChange {
+    pub fn is_deletion(&self) -> bool {
+        self.change_type == "DeletedText"
+    }
+}
+
+/// An editorial note, InDesign's `<Note>` (ADR 172): a remark standing in
+/// the text that prints nowhere. It is a character of its paragraph —
+/// InDesign keeps a U+FEFF there, which the story's length counts and its
+/// text after the note moves past (asked of InDesign 20.0.1,
+/// `notes-probe`) — and the engine keeps a [`NOTE_MARKER`].
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Note {
+    /// The engine's id for the note. InDesign writes none; the importer
+    /// mints one per note, the canvas one per insert.
+    pub id: String,
+    /// Where the note stands: the character offset of its marker in the
+    /// paragraph's text.
+    pub anchor: u32,
+    /// The note's text, its paragraphs separated by U+000D as InDesign's
+    /// `contents` reads it (`<Br/>` in the note's range).
+    pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
+    /// `UserName`: who wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_name: Option<String>,
+    /// `AppliedDocumentUser`: the design map's `<DocumentUser>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_user: Option<String>,
+    /// `CreationDate` / `ModificationDate`, as InDesign spells them
+    /// (`2026-10-16T09:59:49`). The engine reads no clock: an inserted
+    /// note carries what its host passes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modification_date: Option<String>,
+}
+
 /// IDML index marker — a `<PageReference>` or `<IndexEntry>` element
 /// that records "this paragraph contributes to the index entry for
 /// `topic_name`". The renderer's resolution pass collects all
@@ -7421,6 +7545,12 @@ pub struct TableRow {
     /// frame together. `None` ⇒ `false`, the IDML default.
     #[serde(default)]
     pub keep_with_next_row: Option<bool>,
+    /// `StartRow`: where the row starts. InDesign 20.0.1 sets it as a
+    /// paragraph's `StartParagraph` (ADR 175): the row, and every row
+    /// after it, moves to the next column, frame or page, or to the next
+    /// page of the asked parity. `None` ⇒ `Anywhere`, the IDML default.
+    #[serde(default)]
+    pub start_row: Option<StartParagraph>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableColumn {
@@ -8184,6 +8314,12 @@ pub struct Spread {
     /// Empty when no page declared margins.
     #[serde(default)]
     pub page_margins: std::collections::HashMap<String, MarginPreference>,
+    /// The `Self` ids of this spread's text frames that are
+    /// `<EndnoteTextFrame>`s, the frame InDesign hosts the endnote story in
+    /// (ADR 170; a first endnote makes one, ADR 174). Side list, like
+    /// [`Spread::page_margins`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endnote_frames: Vec<String>,
     /// Per-object `Properties/Label` `KeyValuePair`s, keyed by the
     /// host item's `Self` id — IDML's native extension point (the
     /// plugin-metadata carrier; InDesign preserves Labels verbatim).
@@ -8329,6 +8465,179 @@ pub struct Story {
     /// open, so an imported document keeps its authored pages.
     #[serde(default)]
     pub grow: Option<FlowGrowRule>,
+    /// The story's `<CrossReferenceSource>`s, in text order: each source's
+    /// `Self` (the tag its runs carry as `hyperlink_source`) and its
+    /// `AppliedFormat` (ADR 169).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cross_reference_sources: Vec<CrossReferenceSourceDef>,
+    /// The destinations standing in the story's text: each
+    /// `<ParagraphDestination>` and `<HyperlinkTextDestination>`, where it
+    /// stands (ADR 169).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub destinations: Vec<StoryDestination>,
+    /// `<Story IsEndnoteStory="true">`: the story InDesign collects the
+    /// document's endnotes in (ADR 170).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_endnote_story: bool,
+    /// D-02 — the `<XMLElement>`s the story's text stands in: the element
+    /// that tags the whole story (the back story's element of the same
+    /// `Self`) with the elements that tag its ranges as children.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xml_elements: Vec<XmlElement>,
+}
+
+/// D-02 — an `<XMLTag Self Name>` of `XML/Tags.xml`, as InDesign 20.0.1
+/// writes it (`xml-structure-probe`).
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XmlTag {
+    /// `XMLTag/<name>`.
+    pub self_id: String,
+    pub name: String,
+    /// `<Properties><TagColor>`: an `enumeration` (`Red`, …) or an RGB
+    /// triple, as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// D-02 — an `<XMLElement>`: a tag applied to a story, a page item or a
+/// text range, with its attributes and children.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XmlElement {
+    pub self_id: String,
+    /// `MarkupTag`: `XMLTag/<name>`.
+    pub tag: String,
+    /// `XMLContent`: the story or page item it tags; `None` for an element
+    /// that tags a text range (it stands in its story's text) or only
+    /// holds children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// `<XMLAttribute Name Value>`s, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attributes: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<XmlElement>,
+}
+
+/// An `<Endnote Self EndnoteTextRange>` reference in a story (ADR 170).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EndnoteReference {
+    pub self_id: String,
+    /// `EndnoteTextRange`: the `<EndnoteRange>` holding the note's text.
+    pub text_range: Option<String>,
+}
+
+/// An `<EndnoteRange Self SourceEndnote>` in an endnote story (ADR 170).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EndnoteRangeDef {
+    pub self_id: String,
+    /// `SourceEndnote`: the `<Endnote>` whose note this is.
+    pub source: Option<String>,
+}
+
+/// `<EndnoteOption>` (`designmap.xml`): how InDesign numbers and sets
+/// endnotes, as InDesign 20.0.1 writes it (ADR 170). Every field is the
+/// raw value; an absent one reads as InDesign's default.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct EndnoteOptions {
+    /// `EndnoteTitle` (written in the UI's language) and its style.
+    pub title: Option<String>,
+    pub title_style: Option<String>,
+    pub start_at: Option<u32>,
+    pub marker_style: Option<String>,
+    pub text_style: Option<String>,
+    /// `EndnoteSeparatorText` (a tab by default).
+    pub separator_text: Option<String>,
+    pub prefix: Option<String>,
+    pub suffix: Option<String>,
+    /// `<Properties>`: `EndnoteNumberingStyle` (`Arabic`, …).
+    pub numbering_style: Option<String>,
+    /// `RestartEndnoteNumbering` (`Continuous`, …).
+    pub restart: Option<String>,
+    /// `EndnoteMarkerPositioning` (`SuperscriptMarker`, …).
+    pub marker_positioning: Option<String>,
+    /// `ScopeValue` (`EndnoteDocumentScope`, `EndnoteSectionScope`).
+    pub scope: Option<String>,
+    /// `FrameCreateOption` (`NewPage`, …).
+    pub frame_create: Option<String>,
+    /// `ShowEndnotePrefixSuffix` (`NoPrefixSuffix`, …).
+    pub show_prefix_suffix: Option<String>,
+}
+
+impl EndnoteOptions {
+    /// The `ordinal`-th endnote's number (1-based): counted from
+    /// `StartEndnoteNumberAt`, in `EndnoteNumberingStyle` (Arabic when
+    /// absent or unknown).
+    pub fn label(&self, ordinal: u32) -> String {
+        let n = self.start_at.unwrap_or(1).max(1) + ordinal.saturating_sub(1);
+        let style = match self.numbering_style.as_deref() {
+            Some("Asterisks") => return "*".repeat(n as usize),
+            Some(s) => NumberingStyle::from_idml(s),
+            None => NumberingStyle::Arabic,
+        };
+        style.format(n)
+    }
+
+    /// What the reference in the text prints: the number, inside the
+    /// prefix and suffix when `ShowEndnotePrefixSuffix` names the
+    /// reference.
+    pub fn reference_label(&self, ordinal: u32) -> String {
+        self.wrapped(
+            ordinal,
+            matches!(
+                self.show_prefix_suffix.as_deref(),
+                Some("PrefixSuffixReference" | "PrefixSuffixBoth")
+            ),
+        )
+    }
+
+    /// What the note's own text prints for its number.
+    pub fn text_label(&self, ordinal: u32) -> String {
+        self.wrapped(
+            ordinal,
+            matches!(
+                self.show_prefix_suffix.as_deref(),
+                Some("PrefixSuffixText" | "PrefixSuffixEndnoteText" | "PrefixSuffixBoth")
+            ),
+        )
+    }
+
+    fn wrapped(&self, ordinal: u32, shown: bool) -> String {
+        let label = self.label(ordinal);
+        if !shown {
+            return label;
+        }
+        format!(
+            "{}{label}{}",
+            self.prefix.as_deref().unwrap_or(""),
+            self.suffix.as_deref().unwrap_or("")
+        )
+    }
+}
+
+/// A `<CrossReferenceSource>` of a story (ADR 169).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CrossReferenceSourceDef {
+    pub self_id: String,
+    /// `AppliedFormat`: a `<CrossReferenceFormat>`'s `Self`.
+    pub format: Option<String>,
+}
+
+/// A destination in a story's text (ADR 169): a `<ParagraphDestination>`
+/// (the paragraph it stands in) or a `<HyperlinkTextDestination>` (a
+/// point in it).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StoryDestination {
+    pub self_id: String,
+    /// `Name`: what a Text Anchor Name building block prints.
+    pub name: Option<String>,
+    /// The paragraph it stands in (index into the story's paragraphs).
+    pub paragraph: u32,
+    /// Its character offset in that paragraph.
+    pub offset: u32,
+    /// A paragraph destination, not a text anchor.
+    pub paragraph_destination: bool,
 }
 
 /// thoughts ADR 026 — how a story's chain grows, mirroring InDesign 2025's
@@ -8459,12 +8768,24 @@ pub struct DesignMap {
     pub index_topics: Vec<IndexTopic>,
     /// The topics' nesting: each subtopic's `Self` → its parent topic's
     /// (InDesign nests a subtopic's `<Topic>` inside its parent's, up to
-    /// four levels; ADR 166).
+    /// four levels; ADR 168).
     #[serde(default)]
     pub index_topic_parents: BTreeMap<String, String>,
     /// `<CrossReference>` children of the topics: See, See also, …
     #[serde(default)]
     pub index_cross_references: Vec<IndexCrossReference>,
+    /// The bookmarks' nesting: each nested `<Bookmark>`'s `Self` → its
+    /// parent's (InDesign nests a bookmark inside its parent's element;
+    /// ADR 171).
+    #[serde(default)]
+    pub bookmark_parents: BTreeMap<String, String>,
+    /// `<EndnoteOption>` (ADR 170); `None` when the document has none.
+    #[serde(default)]
+    pub endnote_options: Option<EndnoteOptions>,
+    /// `<CrossReferenceFormat>`s: what a cross-reference says, as
+    /// building blocks (ADR 169).
+    #[serde(default)]
+    pub cross_reference_formats: Vec<CrossReferenceFormat>,
     /// `<IndexOptions>` (`Resources/Preferences.xml`): how Generate Index
     /// writes the index. `None` when the document carries none, which
     /// reads as InDesign's defaults.
@@ -8483,6 +8804,14 @@ pub struct DesignMap {
     /// which InDesign reads as chapter 1.
     #[serde(default)]
     pub chapter_number: Option<ChapterNumberPreference>,
+    /// D-02 — the document's XML tags (`XML/Tags.xml`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xml_tags: Vec<XmlTag>,
+    /// D-02 — the document's XML structure (`XML/BackingStory.xml`): the
+    /// root element and its tree. A child tagging a story holds no children
+    /// here; the story's own [`Story::xml_elements`] carries them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xml_root: Option<XmlElement>,
 }
 
 /// Private-use Unicode codepoint placed inline by the story parser
@@ -8516,6 +8845,27 @@ pub const SECTION_MARKER: char = '\u{E01B}';
 /// [`Footnote::anchor`]; the writer writes the `<Footnote>` there.
 pub const FOOTNOTE_REFERENCE_MARKER: char = '\u{E01C}';
 
+/// An endnote's REFERENCE: the character the story parser leaves where an
+/// `<Endnote>` stands in the text (ADR 170). The renderer prints the
+/// note's number there, in the formatting of the run that holds it
+/// (InDesign writes the reference on a superscript range of its own); its
+/// note is [`Paragraph::endnote_references`]'s entry of the same order.
+pub const ENDNOTE_REFERENCE_MARKER: char = '\u{E01D}';
+/// An endnote's NUMBER in the endnote story: the `<?ACE 4?>` opening an
+/// `<EndnoteRange>` (ADR 170). The renderer prints the number of the note
+/// the range belongs to ([`Paragraph::endnote_ranges`]).
+pub const ENDNOTE_NUMBER_MARKER: char = '\u{E01E}';
+/// An editorial note's place (ADR 172): the character InDesign keeps in
+/// the story where a `<Note>` stands (a U+FEFF). It prints nothing; its
+/// note is [`Paragraph::notes`]' entry of the same order.
+pub const NOTE_MARKER: char = '\u{E01F}';
+/// A tracked deletion's place (D-01): text a tracked change removed
+/// prints nothing — InDesign prints a story as if every change were
+/// accepted (`track-changes-probe`) — but is kept, so a save writes its
+/// `<Change ChangeType="DeletedText">` back. The k-th marker of a
+/// paragraph is its k-th [`Paragraph::tracked_deletions`] entry.
+pub const TRACKED_DELETION_MARKER: char = '\u{E020}';
+
 /// True for the private-use characters the story parser leaves for the
 /// page-dependent markers, which renderers substitute and text extractors
 /// drop.
@@ -8530,10 +8880,16 @@ pub fn is_page_marker(ch: char) -> bool {
 }
 
 /// True for every private-use character the story parser leaves in run
-/// text in place of something the renderer generates (the page markers
-/// and the footnote reference): what plain-text extractors drop.
+/// text in place of something the renderer generates (the page markers,
+/// the note references and numbers) or of what prints nothing (a note's
+/// place): what plain-text extractors drop.
 pub fn is_generated_marker(ch: char) -> bool {
-    is_page_marker(ch) || ch == FOOTNOTE_REFERENCE_MARKER
+    is_page_marker(ch)
+        || ch == FOOTNOTE_REFERENCE_MARKER
+        || ch == ENDNOTE_REFERENCE_MARKER
+        || ch == ENDNOTE_NUMBER_MARKER
+        || ch == NOTE_MARKER
+        || ch == TRACKED_DELETION_MARKER
 }
 
 #[cfg(test)]

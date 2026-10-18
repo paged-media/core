@@ -96,7 +96,23 @@ is not written yet.
 | [165](165-update-table-of-contents.md) | Update Table of Contents, as InDesign writes it | Accepted 2026-10-16 |
 | [166](166-a-ruby-wider-than-its-base.md) | A ruby wider than its base, and kana at their proportional widths | Accepted 2026-10-16 |
 | [167](167-japanese-lines-and-vertical-text.md) | Japanese lines, and vertical text as horizontal text turned | Accepted 2026-10-16 |
+| [168](168-generate-index.md) | Generate Index, as InDesign writes it | Accepted 2026-10-16 |
+| [169](169-update-cross-references.md) | Cross-references: a live page number, and Update Cross-References | Accepted 2026-10-16 |
+| [170](170-endnotes-as-indesign-writes-them.md) | Endnotes, read and numbered as InDesign writes them | Accepted 2026-10-16 |
+| [171](171-pdf-bookmarks.md) | PDF bookmarks, as InDesign exports them | Accepted 2026-10-16 |
+| [172](172-editorial-notes.md) | Editorial notes, kept and edited as InDesign keeps them | Accepted 2026-10-16 |
+| [173](173-bookmarks-edited.md) | Bookmarks created, renamed, moved and deleted as InDesign does it | Accepted 2026-10-16 |
+| [174](174-endnotes-inserted-and-deleted.md) | Endnotes inserted, deleted and converted from footnotes, as InDesign does it | Accepted 2026-10-17 |
+| [175](175-table-row-start.md) | A table row starts where its Start Row option asks, as InDesign sets it | Accepted 2026-10-17 |
+| [176](176-nested-tables.md) | A table nested in a cell is drawn as any table is, as InDesign draws it | Accepted 2026-10-17 |
+| [177](177-table-rows-fit-the-text-area.md) | A frame holds the table rows its text area holds, strokes included | Accepted 2026-10-17 |
+| [178](178-footnotes-grow-and-continue.md) | A growing story grows a page for its footnotes, and a note continues from where it stopped | Accepted 2026-10-17 |
+| [179](179-chain-frames-of-different-widths.md) | Each frame of a chain sets its lines at its own measure | Accepted 2026-10-17 |
 | [180](180-the-repository-is-the-document.md) | The repository is the document; a file is a projection | Proposed 2026-10-17 |
+| [181](181-the-viewer-reads-paged-containers.md) | The viewer opens a `.paged` container from its model part, as the editor does | Accepted 2026-10-17 |
+| [182](182-tagged-pdf.md) | Create Tagged PDF: stories and paragraphs as InDesign tags them | Accepted 2026-10-18 |
+| [183](183-structural-export.md) | The IDML a save writes holds the document's structure as InDesign reads it | Accepted 2026-10-18 |
+| [184](184-tracked-changes.md) | Tracked changes kept, accepted and rejected as InDesign keeps them | Accepted 2026-10-18 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

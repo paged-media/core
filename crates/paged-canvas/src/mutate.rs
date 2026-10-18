@@ -299,28 +299,7 @@ fn apply_insert_text(
     //
     // The implementation walks segments and splits as needed,
     // chaining the resulting locate() to the next insertion point.
-    let segments: Vec<&str> = text.split('\n').collect();
-    if segments.len() == 1 {
-        insert_one_segment(paragraphs, offset, segments[0]);
-    } else {
-        // First segment: insert in place.
-        insert_one_segment(paragraphs, offset, segments[0]);
-        let mut next_offset = offset + segments[0].len() as u32;
-        // For each remaining segment: split the paragraph at
-        // next_offset (creating a new paragraph), then insert the
-        // segment at the head of the new paragraph.
-        for seg in &segments[1..] {
-            split_paragraph_at(paragraphs, next_offset);
-            // The split inserts a paragraph break at next_offset;
-            // the new paragraph starts at next_offset + 1 (per the
-            // story-offset contract: synthetic \n between paragraphs
-            // consumes 1 byte of story-local offset).
-            next_offset += 1;
-            insert_one_segment(paragraphs, next_offset, seg);
-            next_offset += seg.len() as u32;
-        }
-    }
-    merge_adjacent_runs_in_target(paragraphs, offset);
+    insert_segments(paragraphs, offset, text);
     Ok(AppliedText {
         story_id: story_id.into(),
         inverse: TextOp::DeleteRange {
@@ -337,6 +316,71 @@ fn apply_insert_text(
             keep_run,
         },
     })
+}
+
+/// `text` inserted at story byte `offset`, each `\n` a paragraph break.
+fn insert_segments(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32, text: &str) {
+    let segments: Vec<&str> = text.split('\n').collect();
+    // First segment: insert in place.
+    insert_one_segment(paragraphs, offset, segments[0]);
+    let mut next_offset = offset + segments[0].len() as u32;
+    // For each remaining segment: split the paragraph at next_offset
+    // (creating a new paragraph), then insert the segment at the head of
+    // the new paragraph.
+    for seg in &segments[1..] {
+        split_paragraph_at(paragraphs, next_offset);
+        // The split inserts a paragraph break at next_offset; the new
+        // paragraph starts at next_offset + 1 (per the story-offset
+        // contract: synthetic \n between paragraphs consumes 1 byte of
+        // story-local offset).
+        next_offset += 1;
+        insert_one_segment(paragraphs, next_offset, seg);
+        next_offset += seg.len() as u32;
+    }
+    merge_adjacent_runs_in_target(paragraphs, offset);
+}
+
+/// ADR 172 — Convert to Text: note `k` of paragraph `pi` leaves the model
+/// and its place becomes a space and the note's text, the note's
+/// paragraphs (U+000D) the story's, as InDesign 20.0.1 converts one
+/// (`notes-probe`). The text goes in where the note stood, in the
+/// formatting of the run that held it.
+pub(crate) fn convert_note_to_text(
+    paragraphs: &mut Vec<paged_model::Paragraph>,
+    pi: usize,
+    k: usize,
+) {
+    let para = &mut paragraphs[pi];
+    let markers: Vec<u32> = para
+        .runs
+        .iter()
+        .flat_map(|r| r.text.chars())
+        .enumerate()
+        .filter(|(_, c)| *c == paged_model::NOTE_MARKER)
+        .map(|(i, _)| i as u32)
+        .collect();
+    let at = if markers.len() == para.notes.len() {
+        markers[k]
+    } else {
+        para.notes[k].anchor
+    };
+    let note = para.notes.remove(k);
+    let byte = para.byte_of_char_offset(at);
+    if markers.contains(&at) {
+        let mut taken = String::new();
+        splice_paragraph(
+            para,
+            byte,
+            byte + paged_model::NOTE_MARKER.len_utf8(),
+            &mut taken,
+        );
+    }
+    let start: u32 = paragraphs[..pi]
+        .iter()
+        .map(|p| p.runs.iter().map(|r| r.text.len() as u32).sum::<u32>() + 1)
+        .sum();
+    let text = format!(" {}", note.text.replace(['\r', '\u{2029}'], "\n"));
+    insert_segments(paragraphs, start + byte as u32, &text);
 }
 
 /// v69 — undo of a `DeleteRange`: the delete left ONE paragraph where the
@@ -523,6 +567,8 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
     let split_char = para.char_offset_of_byte(before + byte_in_run);
     let (moved_frames, moved_offsets) = take_anchors_from(para, split_char);
     let (moved_notes, moved_table) = take_notes_and_table_from(para, split_char);
+    let moved_editorial = take_editorial_notes_from(para, split_char);
+    let moved_deletions = take_tracked_deletions_from(para, split_char);
     // Tail runs that come AFTER the split point move to the new
     // paragraph. The split-point run itself is split into two halves;
     // the right half becomes the first run of the new paragraph.
@@ -546,6 +592,8 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
         anchored_frames: moved_frames,
         anchored_frame_offsets: moved_offsets,
         footnotes: moved_notes,
+        notes: moved_editorial,
+        tracked_deletions: moved_deletions,
         table,
         table_anchor,
         ..Default::default()
@@ -559,28 +607,94 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
 /// order when the paragraph holds one marker per note (what the renderer
 /// reads), by its anchor otherwise. Call it before the text changes.
 fn drop_notes_in(para: &mut paged_model::Paragraph, from: u32, to: u32) {
-    if para.footnotes.is_empty() {
-        return;
+    let markers = |para: &paged_model::Paragraph, mark: char| -> Vec<u32> {
+        para.runs
+            .iter()
+            .flat_map(|r| r.text.chars())
+            .enumerate()
+            .filter(|(_, c)| *c == mark)
+            .map(|(i, _)| i as u32)
+            .collect()
+    };
+    if !para.footnotes.is_empty() {
+        let markers = markers(para, paged_model::FOOTNOTE_REFERENCE_MARKER);
+        let one_each = markers.len() == para.footnotes.len();
+        let mut k = 0usize;
+        para.footnotes.retain(|f| {
+            let at = if one_each {
+                markers[k]
+            } else {
+                f.anchor.unwrap_or(0)
+            };
+            k += 1;
+            !(from..to).contains(&at)
+        });
     }
-    let markers: Vec<u32> = para
+    // D-01 — a tracked deletion goes with its place: the k-th marker is
+    // the k-th entry (left alone when the two disagree).
+    if !para.tracked_deletions.is_empty() {
+        let markers = markers(para, paged_model::TRACKED_DELETION_MARKER);
+        if markers.len() == para.tracked_deletions.len() {
+            let mut k = 0usize;
+            para.tracked_deletions.retain(|_| {
+                let at = markers[k];
+                k += 1;
+                !(from..to).contains(&at)
+            });
+        }
+    }
+    // ADR 172 — an editorial note goes with its place, as InDesign
+    // deletes it with the character.
+    if !para.notes.is_empty() {
+        let markers = markers(para, paged_model::NOTE_MARKER);
+        let one_each = markers.len() == para.notes.len();
+        let mut k = 0usize;
+        para.notes.retain(|n| {
+            let at = if one_each { markers[k] } else { n.anchor };
+            k += 1;
+            !(from..to).contains(&at)
+        });
+    }
+}
+
+/// Remove from `para` the tracked deletions standing at character `from`
+/// or later (D-01): they go with their markers to the paragraph a split
+/// starts.
+fn take_tracked_deletions_from(
+    para: &mut paged_model::Paragraph,
+    from: u32,
+) -> Vec<paged_model::TrackedChange> {
+    let before = para
         .runs
         .iter()
         .flat_map(|r| r.text.chars())
-        .enumerate()
-        .filter(|(_, c)| *c == paged_model::FOOTNOTE_REFERENCE_MARKER)
-        .map(|(i, _)| i as u32)
-        .collect();
-    let one_each = markers.len() == para.footnotes.len();
-    let mut k = 0usize;
-    para.footnotes.retain(|f| {
-        let at = if one_each {
-            markers[k]
-        } else {
-            f.anchor.unwrap_or(0)
-        };
-        k += 1;
-        !(from..to).contains(&at)
-    });
+        .take(from as usize)
+        .filter(|c| *c == paged_model::TRACKED_DELETION_MARKER)
+        .count();
+    if before >= para.tracked_deletions.len() {
+        return Vec::new();
+    }
+    para.tracked_deletions.split_off(before)
+}
+
+/// Remove from `para` the editorial notes standing at character `from`
+/// or later, returning them with their anchors rebased to `from` (ADR
+/// 172): they go with their characters to the paragraph a split starts.
+fn take_editorial_notes_from(
+    para: &mut paged_model::Paragraph,
+    from: u32,
+) -> Vec<paged_model::Note> {
+    let (moved, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut para.notes)
+        .into_iter()
+        .partition(|n| n.anchor >= from);
+    para.notes = kept;
+    moved
+        .into_iter()
+        .map(|mut n| {
+            n.anchor -= from;
+            n
+        })
+        .collect()
 }
 
 /// Remove from `para` the footnotes whose reference stands at character
@@ -806,6 +920,8 @@ fn apply_delete_range(
         let (moved_frames, moved_offsets) = take_anchors_from(&mut paragraphs[end_para], end_char);
         let (moved_notes, moved_table) =
             take_notes_and_table_from(&mut paragraphs[end_para], end_char);
+        let moved_editorial = take_editorial_notes_from(&mut paragraphs[end_para], end_char);
+        let moved_deletions = take_tracked_deletions_from(&mut paragraphs[end_para], end_char);
         let end_tail_runs = capture_tail_runs(&paragraphs[end_para], end_local);
         let start_para_ref = &mut paragraphs[start_para];
         truncate_paragraph_to(start_para_ref, start_local);
@@ -823,6 +939,13 @@ fn apply_delete_range(
                 f.anchor = f.anchor.map(|a| a + start_char);
                 f
             }));
+        start_para_ref
+            .notes
+            .extend(moved_editorial.into_iter().map(|mut n| {
+                n.anchor += start_char;
+                n
+            }));
+        start_para_ref.tracked_deletions.extend(moved_deletions);
         if start_para_ref.table.is_none() {
             if let Some((table, anchor)) = moved_table {
                 start_para_ref.table = Some(table);
@@ -1225,6 +1348,126 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// D-02 — the structure reads depth-first, a story's range elements
+    /// under the element that tags the story.
+    #[test]
+    fn the_xml_structure_reads_depth_first_into_tagged_stories() {
+        use paged_model::XmlElement;
+        let mut model = CanvasModel::load("d", &small_idml(), CanvasOptions::default()).unwrap();
+        let el =
+            |id: &str, tag: &str, content: Option<&str>, children: Vec<XmlElement>| XmlElement {
+                self_id: id.into(),
+                tag: format!("XMLTag/{tag}"),
+                content: content.map(str::to_string),
+                children,
+                ..Default::default()
+            };
+        let scene = model.scene_mut();
+        scene.designmap.xml_root = Some(el(
+            "r",
+            "Root",
+            None,
+            vec![
+                el("a", "Article", Some("story1"), vec![]),
+                el("f", "Figure", Some("tf9"), vec![]),
+            ],
+        ));
+        scene.stories[0].story.xml_elements = vec![el(
+            "a",
+            "Article",
+            Some("story1"),
+            vec![
+                el("t", "Title", None, vec![]),
+                el("b", "Body", None, vec![]),
+            ],
+        )];
+        let rows: Vec<(String, u32, Option<String>)> = model
+            .xml_elements()
+            .into_iter()
+            .map(|r| (r.tag, r.depth, r.story_id))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("Root".into(), 0, None),
+                ("Article".into(), 1, None),
+                ("Title".into(), 2, Some("story1".into())),
+                ("Body".into(), 2, Some("story1".into())),
+                ("Figure".into(), 1, None),
+            ]
+        );
+    }
+
+    /// D-01 — "Hello" + a tracked deletion's place + " world".
+    fn model_with_deletion() -> CanvasModel {
+        let mut model = CanvasModel::load("d", &small_idml(), CanvasOptions::default()).unwrap();
+        let para = &mut model.scene_mut().stories[0].story.paragraphs[0];
+        para.runs[0].text = format!("Hello{} world", paged_model::TRACKED_DELETION_MARKER);
+        para.tracked_deletions = vec![paged_model::TrackedChange {
+            change_type: "DeletedText".into(),
+            user_name: Some("Reviewer".into()),
+            deleted_text: Some("cruel ".into()),
+            ..Default::default()
+        }];
+        model
+    }
+
+    fn delete(model: &mut CanvasModel, start: u32, end: u32) {
+        apply(
+            model.scene_mut(),
+            &TextOp::DeleteRange {
+                story_id: "story1".into(),
+                start,
+                end,
+                recovered: String::new(),
+                unseed: false,
+                keep_run: false,
+                cell: None,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_tracked_deletion_goes_with_its_place() {
+        let mut model = model_with_deletion();
+        assert_eq!(model.tracked_changes().len(), 1);
+        assert_eq!(model.tracked_changes()[0].offset, 5);
+        assert_eq!(model.tracked_changes()[0].text, "cruel ");
+        // Text before it moves its place, not the deletion's identity.
+        delete(&mut model, 0, 2);
+        assert_eq!(model.tracked_changes()[0].offset, 3);
+        // Deleting its character (three bytes of UTF-8) deletes it.
+        delete(&mut model, 3, 6);
+        assert!(model.tracked_changes().is_empty());
+    }
+
+    #[test]
+    fn a_tracked_deletion_follows_a_split_and_a_merge() {
+        let mut model = model_with_deletion();
+        apply(
+            model.scene_mut(),
+            &TextOp::InsertText {
+                story_id: "story1".into(),
+                offset: 2,
+                text: "\n".into(),
+                cell: None,
+                restore: None,
+            },
+        )
+        .unwrap();
+        let paras = &model.scene().stories[0].story.paragraphs;
+        assert_eq!(paras.len(), 2);
+        assert!(paras[0].tracked_deletions.is_empty());
+        assert_eq!(paras[1].tracked_deletions.len(), 1, "it went with its text");
+        // Joining the paragraphs again brings it back.
+        delete(&mut model, 2, 3);
+        let paras = &model.scene().stories[0].story.paragraphs;
+        assert_eq!(paras.len(), 1);
+        assert_eq!(paras[0].tracked_deletions.len(), 1);
+        assert_eq!(model.tracked_changes()[0].offset, 5);
     }
 
     #[test]

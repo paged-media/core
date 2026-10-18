@@ -2,7 +2,7 @@
 
 - **Status:** Accepted 2026-10-16.
 - **Scope:**
-  - `paged-wire`: `Mutation::UpdateTableOfContents` (protocol 73).
+  - `paged-wire`: `Mutation::UpdateTableOfContents` (`v0.71.13`, on protocol 71).
   - `paged-mutate`: `Operation::ReplaceStoryParagraphs` (`apply::story`).
   - `paged-model`: `TOCStyleEntryDef.page_number_position`, `.page_number_style`,
     `.separator_style`, `.sort_alphabet`, and `TOCStyleDef.create_bookmarks` (serde default).
@@ -124,4 +124,4 @@ Before this, the stale page number `8` outlived the update in the saved file.
   - `NumberedParagraphs` (whether a list number joins the entry);
   - `IncludeBookDocuments`.
 - **Inserting a new TOC** (`insertTableOfContents`) and TOC style editing.
-- **The index** (L-05) and **cross-references** (L-03) take the same route next.
+- **Cross-references** (L-03) take the same route next; the index followed in ADR 168.

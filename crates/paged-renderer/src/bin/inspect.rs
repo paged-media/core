@@ -858,7 +858,7 @@ fn package_entries(idml: &[u8]) -> Result<std::collections::BTreeMap<String, Vec
         if e.is_dir() {
             continue;
         }
-        let name = e.name().to_string();
+        let name = e.name().context("zip entry name")?.into_owned();
         let mut buf = Vec::new();
         e.read_to_end(&mut buf).context("read entry")?;
         out.insert(name, buf);
