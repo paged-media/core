@@ -8443,6 +8443,45 @@ pub struct Story {
     /// document's endnotes in (ADR 170).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_endnote_story: bool,
+    /// D-02 — the `<XMLElement>`s the story's text stands in: the element
+    /// that tags the whole story (the back story's element of the same
+    /// `Self`) with the elements that tag its ranges as children.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xml_elements: Vec<XmlElement>,
+}
+
+/// D-02 — an `<XMLTag Self Name>` of `XML/Tags.xml`, as InDesign 20.0.1
+/// writes it (`xml-structure-probe`).
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XmlTag {
+    /// `XMLTag/<name>`.
+    pub self_id: String,
+    pub name: String,
+    /// `<Properties><TagColor>`: an `enumeration` (`Red`, …) or an RGB
+    /// triple, as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// D-02 — an `<XMLElement>`: a tag applied to a story, a page item or a
+/// text range, with its attributes and children.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XmlElement {
+    pub self_id: String,
+    /// `MarkupTag`: `XMLTag/<name>`.
+    pub tag: String,
+    /// `XMLContent`: the story or page item it tags; `None` for an element
+    /// that tags a text range (it stands in its story's text) or only
+    /// holds children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// `<XMLAttribute Name Value>`s, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attributes: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<XmlElement>,
 }
 
 /// An `<Endnote Self EndnoteTextRange>` reference in a story (ADR 170).
@@ -8729,6 +8768,14 @@ pub struct DesignMap {
     /// which InDesign reads as chapter 1.
     #[serde(default)]
     pub chapter_number: Option<ChapterNumberPreference>,
+    /// D-02 — the document's XML tags (`XML/Tags.xml`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xml_tags: Vec<XmlTag>,
+    /// D-02 — the document's XML structure (`XML/BackingStory.xml`): the
+    /// root element and its tree. A child tagging a story holds no children
+    /// here; the story's own [`Story::xml_elements`] carries them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xml_root: Option<XmlElement>,
 }
 
 /// Private-use Unicode codepoint placed inline by the story parser
