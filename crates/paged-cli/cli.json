@@ -1344,7 +1344,7 @@
               ]
             }
           ],
-          "longAbout": "One typed document collection.\n\nswatches | gradients | colorGroups | paragraphStyles | characterStyles | objectStyles | cellStyles | tableStyles | layers | spreads | pages | masterPages | links | articles | hyperlinks | bookmarks | crossReferences | conditions | conditionSets | fonts | indexTopics | inks | sections | stories",
+          "longAbout": "One typed document collection.\n\nswatches | gradients | colorGroups | paragraphStyles | characterStyles | objectStyles | cellStyles | tableStyles | layers | spreads | pages | masterPages | links | articles | hyperlinks | bookmarks | crossReferences | conditions | conditionSets | fonts | indexTopics | inks | sections | stories | xmlTags | xmlElements",
           "name": "collection",
           "subcommands": []
         },
