@@ -42,7 +42,8 @@ pub use object::{
 };
 pub use pack::{faulting, read_records, write_record, Flush, Loc, PackFile, PackStore};
 pub use package::{
-    bundle_parts, import, project, read_part, Bundle, Snapshot, CHUNK_THRESHOLD, HISTORY_PREFIX,
+    bundle_parts, import, part_entry, project, read_part, Bundle, Snapshot, CHUNK_THRESHOLD,
+    HISTORY_PREFIX,
 };
 pub use policy::{Autonomy, Policy, RefKind, Role};
 pub use repo::{Ctx, Repo};

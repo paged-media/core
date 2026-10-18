@@ -66,7 +66,9 @@ fn add(objects: &mut BTreeMap<Hash, (Kind, Vec<u8>)>, kind: Kind, bytes: Vec<u8>
     h
 }
 
-fn entry_for(
+/// The tree entry for one part, adding its blob (or its chunks and chunk list)
+/// to `objects`: how a host that writes parts directly builds a tree.
+pub fn part_entry(
     path: String,
     bytes: Vec<u8>,
     objects: &mut BTreeMap<Hash, (Kind, Vec<u8>)>,
@@ -141,7 +143,7 @@ pub fn import(file: &[u8], name: &str) -> Result<Snapshot, Error> {
     let mut entries = Vec::with_capacity(parts.len());
     for (path, bytes) in parts {
         check_path(&path)?;
-        entries.push(entry_for(path, bytes, &mut objects));
+        entries.push(part_entry(path, bytes, &mut objects));
     }
     let tree = add(&mut objects, Kind::Tree, encode(&Tree { v: 1, entries }));
     let sha256 = Sha256::digest(file)

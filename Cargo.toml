@@ -20,6 +20,7 @@ members = [
     "crates/paged-store",
     "crates/paged-repo",
     "crates/paged-repo-wasm",
+    "crates/paged-mcp",
     "crates/paged-wire",
     "crates/paged-canvas",
     "crates/paged-canvas-wasm",
