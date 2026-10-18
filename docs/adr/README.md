@@ -109,6 +109,7 @@ is not written yet.
 | [178](178-footnotes-grow-and-continue.md) | A growing story grows a page for its footnotes, and a note continues from where it stopped | Accepted 2026-10-17 |
 | [179](179-chain-frames-of-different-widths.md) | Each frame of a chain sets its lines at its own measure | Accepted 2026-10-17 |
 | [181](181-the-viewer-reads-paged-containers.md) | The viewer opens a `.paged` container from its model part, as the editor does | Accepted 2026-10-17 |
+| [183](183-structural-export.md) | The IDML a save writes holds the document's structure as InDesign reads it | Accepted 2026-10-18 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
