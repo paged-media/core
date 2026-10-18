@@ -387,6 +387,35 @@ fn tables_of(story: &Story) -> Vec<&Table> {
     out
 }
 
+/// Each paragraph's text, as [`diff_stories`] compares a story with its
+/// re-read export.
+///
+/// Empty paragraphs are left out: the parser drops a paragraph with
+/// neither text nor table on read, so one the model still holds (a
+/// frame's initial empty paragraph) is a read-side asymmetry, not lost
+/// text.
+///
+/// A paragraph holding a table compares without one trailing "\n". A
+/// table with no anchor after text means "the text is a paragraph of its
+/// own and the table follows it" (idml-export `inline_objects`), and the
+/// writer spells that `text<Br/><Table/>`; the reader keeps that mark as
+/// a "\n" in the host paragraph (idml-import, the `Table` arm). The same
+/// mark, implied on one side and spelled on the other: the showcase's
+/// DOCX manuscript story was reported as exporting different text for it.
+fn paragraph_texts(paras: &[Paragraph]) -> Vec<String> {
+    paras
+        .iter()
+        .map(|p| {
+            let mut text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+            if p.table.is_some() && text.ends_with('\n') {
+                text.pop();
+            }
+            text
+        })
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
 fn table_shape(t: &Table) -> (usize, usize) {
     let rows = if t.rows.is_empty() {
         (t.header_row_count + t.body_row_count + t.footer_row_count) as usize
@@ -450,17 +479,6 @@ fn diff_stories(scene: &Document, twin: &Document, out: &mut Vec<String>) {
         // The text itself, paragraph by paragraph: a run the exporter
         // re-serialised from the wrong model run, or a mark it dropped,
         // shows up here as a character-count / paragraph-count mismatch.
-        // Empty paragraphs are left out: the parser drops a paragraph
-        // with neither text nor table on read, so one the model still
-        // holds (a frame's initial empty paragraph) is a read-side
-        // asymmetry, not lost text.
-        let paragraph_texts = |paras: &[Paragraph]| -> Vec<String> {
-            paras
-                .iter()
-                .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
-                .filter(|t| !t.is_empty())
-                .collect()
-        };
         let scene_paras = paragraph_texts(&s.story.paragraphs);
         let twin_paras = paragraph_texts(&t.story.paragraphs);
         if scene_paras != twin_paras {
@@ -789,5 +807,36 @@ mod tests {
             &table(&["Opening", "1,200", "Closing"], true)
         )
         .is_none());
+    }
+
+    fn paragraph(text: &str, with_table: bool) -> Paragraph {
+        Paragraph {
+            runs: vec![CharacterRun {
+                text: text.to_string(),
+                ..Default::default()
+            }],
+            table: with_table.then(|| table(&["Cell"], true)),
+            ..Default::default()
+        }
+    }
+
+    /// The model's paragraph holds "Lead" and an unanchored table; the
+    /// re-read export holds "Lead\n" and the table. Only that mark is
+    /// forgiven: changed text still differs, and a trailing newline in a
+    /// paragraph without a table is text.
+    #[test]
+    fn a_table_after_text_compares_without_its_spelled_mark() {
+        assert_eq!(
+            paragraph_texts(&[paragraph("Lead", true)]),
+            paragraph_texts(&[paragraph("Lead\n", true)])
+        );
+        assert_ne!(
+            paragraph_texts(&[paragraph("Lead", true)]),
+            paragraph_texts(&[paragraph("Lead.\n", true)])
+        );
+        assert_ne!(
+            paragraph_texts(&[paragraph("Lead", false)]),
+            paragraph_texts(&[paragraph("Lead\n", false)])
+        );
     }
 }
