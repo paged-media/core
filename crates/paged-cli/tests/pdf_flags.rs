@@ -32,7 +32,11 @@ fn export(stem: &str, flags: &[&str]) -> Vec<u8> {
         .args(flags)
         .output()
         .expect("run paged export");
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
     std::fs::read(&out).expect("pdf written")
 }
 
