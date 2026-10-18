@@ -111,6 +111,7 @@ is not written yet.
 | [181](181-the-viewer-reads-paged-containers.md) | The viewer opens a `.paged` container from its model part, as the editor does | Accepted 2026-10-17 |
 | [182](182-tagged-pdf.md) | Create Tagged PDF: stories and paragraphs as InDesign tags them | Accepted 2026-10-18 |
 | [183](183-structural-export.md) | The IDML a save writes holds the document's structure as InDesign reads it | Accepted 2026-10-18 |
+| [184](184-tracked-changes.md) | Tracked changes kept, accepted and rejected as InDesign keeps them | Accepted 2026-10-18 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

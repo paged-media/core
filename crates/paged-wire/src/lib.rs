@@ -1214,6 +1214,19 @@ pub enum Mutation {
     DeleteNote {
         note_id: String,
     },
+    /// Accept the tracked deletion whose place stands at contiguous story
+    /// char `offset`, as the `trackedChanges` collection lists it (D-01):
+    /// the text stays deleted. Undoable in one step.
+    AcceptTrackedChange {
+        story_id: String,
+        offset: u32,
+    },
+    /// Reject the tracked deletion at `offset` (D-01): its text comes back
+    /// where its place stood, as InDesign rejects one. Undoable in one step.
+    RejectTrackedChange {
+        story_id: String,
+        offset: u32,
+    },
     /// Convert to Text (ADR 172): note `note_id`'s place becomes a space
     /// and the note's text, its paragraphs the story's, as InDesign 20.0.1
     /// converts one. Undoable in one step.
@@ -2481,6 +2494,8 @@ mutation_vocabulary! {
     InsertNote,
     EditNote,
     DeleteNote,
+    AcceptTrackedChange,
+    RejectTrackedChange,
     ConvertNoteToText,
     CreateBookmark,
     DeleteBookmark,

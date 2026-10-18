@@ -82,7 +82,7 @@ fn marks(para: &paged_model::Paragraph, mark: char) -> Vec<u32> {
 
 /// Insert `s` at paragraph-local char `at`, into the run holding it (or
 /// ending there), moving every anchor after it on.
-fn insert_str(para: &mut paged_model::Paragraph, at: u32, s: &str) {
+pub(super) fn insert_str(para: &mut paged_model::Paragraph, at: u32, s: &str) {
     para.shift_anchors(at, s.chars().count() as i64);
     for (i, ch) in s.chars().enumerate() {
         insert_char(para, at + i as u32, ch);
@@ -90,7 +90,7 @@ fn insert_str(para: &mut paged_model::Paragraph, at: u32, s: &str) {
 }
 
 /// Remove paragraph-local chars `[from, to)`.
-fn remove_chars(para: &mut paged_model::Paragraph, from: u32, to: u32) {
+pub(super) fn remove_chars(para: &mut paged_model::Paragraph, from: u32, to: u32) {
     for _ in from..to {
         remove_char(para, from);
     }

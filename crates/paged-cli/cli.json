@@ -4394,6 +4394,8 @@
             "insertNote",
             "editNote",
             "deleteNote",
+            "acceptTrackedChange",
+            "rejectTrackedChange",
             "convertNoteToText",
             "createBookmark",
             "deleteBookmark",
@@ -5533,5 +5535,5 @@
       "subcommands": []
     }
   ],
-  "protocol": 73
+  "protocol": 74
 }
