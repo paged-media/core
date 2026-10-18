@@ -9419,6 +9419,41 @@ impl CanvasModel {
         out
     }
 
+    /// D-01 — the document's tracked deletions, each at the story offset
+    /// of its marker.
+    pub fn tracked_changes(&self) -> Vec<crate::channel::TrackedChangeSummary> {
+        let mut out = Vec::new();
+        for story in &self.scene.stories {
+            let mut start = 0u32;
+            for para in &story.story.paragraphs {
+                let markers: Vec<u32> = para
+                    .runs
+                    .iter()
+                    .flat_map(|r| r.text.chars())
+                    .enumerate()
+                    .filter(|(_, c)| *c == paged_model::TRACKED_DELETION_MARKER)
+                    .map(|(i, _)| i as u32)
+                    .collect();
+                for (k, change) in para.tracked_deletions.iter().enumerate() {
+                    out.push(crate::channel::TrackedChangeSummary {
+                        story_id: story.self_id.clone(),
+                        offset: start + markers.get(k).copied().unwrap_or(0),
+                        change_type: change.change_type.clone(),
+                        user_name: change.user_name.clone(),
+                        date: change.date.clone(),
+                        text: change.deleted_text.clone().unwrap_or_default(),
+                    });
+                }
+                start += para
+                    .runs
+                    .iter()
+                    .map(|r| r.text.chars().count() as u32)
+                    .sum::<u32>();
+            }
+        }
+        out
+    }
+
     /// The story, paragraph and index in it of note `note_id`.
     fn find_note(&self, note_id: &str) -> Option<(usize, usize, usize)> {
         self.scene.stories.iter().enumerate().find_map(|(si, s)| {
@@ -10034,6 +10069,7 @@ impl CanvasModel {
             Notes => serde_json::to_value(self.notes()).unwrap_or_default(),
             XmlTags => serde_json::to_value(&self.scene.designmap.xml_tags).unwrap_or_default(),
             XmlElements => serde_json::to_value(self.xml_elements()).unwrap_or_default(),
+            TrackedChanges => serde_json::to_value(self.tracked_changes()).unwrap_or_default(),
             Endnotes => serde_json::to_value(self.endnotes()).unwrap_or_default(),
             Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
             Sections => serde_json::to_value(self.sections()).unwrap_or_default(),

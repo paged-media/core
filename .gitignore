@@ -1,5 +1,9 @@
-# Rust build output
+# Rust build output. `target/` misses a `target` SYMLINK (a worktree whose
+# build cache lives on another disk) and a worktree's own target dir under
+# another name (`CARGO_TARGET_DIR=target-repo`), so name all three.
 target/
+/target
+/target-*/
 **/*.rs.bk
 
 # WASM build output

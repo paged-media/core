@@ -7033,6 +7033,10 @@ pub struct Paragraph {
     /// text order: the k-th [`NOTE_MARKER`] is the k-th.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
+    /// D-01 — the tracked deletions standing in this paragraph, in text
+    /// order: the k-th [`TRACKED_DELETION_MARKER`] is the k-th.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tracked_deletions: Vec<TrackedChange>,
     /// Phase 5 — `<Topic>` references on this paragraph from
     /// `<PageReference>` or `<IndexEntry>` markers. Each entry maps
     /// to one place where this paragraph contributes to the index.
@@ -7169,6 +7173,38 @@ pub struct Footnote {
     /// style cascade just like any other paragraph stream.
     pub paragraphs: Vec<Paragraph>,
 }
+/// A tracked change, InDesign's `<Change>` (D-01; asked of InDesign
+/// 20.0.1, `track-changes-probe`): `<Change ChangeType UserName Date
+/// AppliedDocumentUser>` wrapping the text it inserted, moved or deleted,
+/// inside a character range.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrackedChange {
+    /// `ChangeType`: `InsertedText`, `DeletedText` or `MovedText`.
+    pub change_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_user: Option<String>,
+    /// `Date`, as InDesign spells it (`2026-10-18T05:38:08`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// A deletion's content: the `<Change>` element's children verbatim
+    /// (InDesign nests whole paragraph and character ranges in it), which
+    /// a save writes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_xml: Option<String>,
+    /// A deletion's text, as InDesign's `contents` reads it (paragraphs
+    /// separated by U+000D), for a reviewer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_text: Option<String>,
+}
+
+impl TrackedChange {
+    pub fn is_deletion(&self) -> bool {
+        self.change_type == "DeletedText"
+    }
+}
+
 /// An editorial note, InDesign's `<Note>` (ADR 172): a remark standing in
 /// the text that prints nowhere. It is a character of its paragraph —
 /// InDesign keeps a U+FEFF there, which the story's length counts and its
@@ -8823,6 +8859,12 @@ pub const ENDNOTE_NUMBER_MARKER: char = '\u{E01E}';
 /// the story where a `<Note>` stands (a U+FEFF). It prints nothing; its
 /// note is [`Paragraph::notes`]' entry of the same order.
 pub const NOTE_MARKER: char = '\u{E01F}';
+/// A tracked deletion's place (D-01): text a tracked change removed
+/// prints nothing — InDesign prints a story as if every change were
+/// accepted (`track-changes-probe`) — but is kept, so a save writes its
+/// `<Change ChangeType="DeletedText">` back. The k-th marker of a
+/// paragraph is its k-th [`Paragraph::tracked_deletions`] entry.
+pub const TRACKED_DELETION_MARKER: char = '\u{E020}';
 
 /// True for the private-use characters the story parser leaves for the
 /// page-dependent markers, which renderers substitute and text extractors
@@ -8847,6 +8889,7 @@ pub fn is_generated_marker(ch: char) -> bool {
         || ch == ENDNOTE_REFERENCE_MARKER
         || ch == ENDNOTE_NUMBER_MARKER
         || ch == NOTE_MARKER
+        || ch == TRACKED_DELETION_MARKER
 }
 
 #[cfg(test)]

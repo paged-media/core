@@ -4147,6 +4147,10 @@ pub(super) fn substitute_generated_markers(
             } else if ch == paged_model::NOTE_MARKER {
                 // ADR 172 — an editorial note prints nothing.
                 (String::new(), GeneratedKind::Note)
+            } else if ch == paged_model::TRACKED_DELETION_MARKER {
+                // D-01 — deleted text prints nothing: InDesign prints a
+                // story as if every change were accepted.
+                (String::new(), GeneratedKind::TrackedDeletion)
             } else if ch == paged_model::SECTION_MARKER {
                 (page(ch), GeneratedKind::SectionMarker)
             } else if paged_model::is_page_marker(ch) {
