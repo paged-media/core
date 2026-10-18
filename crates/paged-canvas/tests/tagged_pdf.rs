@@ -64,14 +64,54 @@ fn a_tagged_pdf_carries_the_structure_indesign_writes() {
     assert!(pdf.contains("/DisplayDocTitle true"));
     assert!(pdf.contains("/ParentTree"));
     assert_eq!(count(&pdf, "/S /Document"), 1);
-    assert_eq!(count(&pdf, "/S /Art"), 1);
-    assert!(count(&pdf, "/S /Sect") >= 1, "a Story per text story");
-    let paragraphs = count(&pdf, "/S /P\n") + count(&pdf, "/S /P ") + count(&pdf, "/S /P/");
-    assert!(
-        paragraphs >= count(&pdf, "/S /Sect"),
-        "every story holds a paragraph"
-    );
+    // InDesign's names, role-mapped to the standard types
+    // (`tagged-styles-probe`): one Article, a Story per text story, and
+    // each paragraph named after its style.
+    assert_eq!(count(&pdf, "/S /Article"), 1);
+    let stories = count(&pdf, "/S /Story");
+    assert!(stories >= 1, "a Story per text story");
+    assert!(pdf.contains("/RoleMap"));
+    assert!(pdf.contains("/Article /Art"));
+    assert!(pdf.contains("/Story /Sect"));
+    let styled = count(&pdf, "/S /") - count(&pdf, "/S /Document") - 1 - stories;
+    assert!(styled >= stories, "every story holds a paragraph");
     assert!(count(&pdf, "/StructParents") >= 1, "pages map their marks");
+}
+
+/// A paragraph's element is named after its style as InDesign names it:
+/// every character but an ASCII letter or digit turned into `_`.
+#[test]
+fn paragraph_elements_are_named_after_their_style() {
+    assert_eq!(
+        paged_renderer::pipeline::structure_name("$ID/[No paragraph style]"),
+        "_No_paragraph_style_"
+    );
+    assert_eq!(
+        paged_renderer::pipeline::structure_name("Heading"),
+        "Heading"
+    );
+    let pdf = export(true);
+    let roles = pdf
+        .split("/RoleMap")
+        .nth(1)
+        .and_then(|r| r.split(">>").next())
+        .unwrap_or_default()
+        .to_string();
+    for name in pdf
+        .match_indices("/S /")
+        .map(|(i, _)| {
+            pdf[i + 4..]
+                .split(|c: char| c.is_whitespace() || c == '/')
+                .next()
+                .unwrap_or("")
+        })
+        .filter(|n| !matches!(*n, "Document" | "Article" | "Story"))
+    {
+        assert!(
+            roles.contains(&format!("/{name} /P")),
+            "{name} is role-mapped to P: {roles}"
+        );
+    }
 }
 
 #[test]
