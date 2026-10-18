@@ -268,6 +268,7 @@ pub fn emit_glyph_slice_blend<O, F>(
                 paint,
                 unicode: g.ch,
                 is_stroke: false,
+                structure: runs.current,
             });
         }
         if normal {
@@ -350,6 +351,7 @@ pub fn emit_glyph_slice_stroke<O, S>(
                 paint,
                 unicode: g.ch,
                 is_stroke: true,
+                structure: runs.current,
             });
         }
         list.push(DisplayCommand::StrokePath {

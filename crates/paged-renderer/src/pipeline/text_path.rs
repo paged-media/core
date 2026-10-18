@@ -895,6 +895,7 @@ pub(super) fn emit_text_path_into(
                 paint: g.paint,
                 unicode: None,
                 is_stroke: false,
+                structure: runs.current,
             });
         }
         page.list.push(paged_compose::DisplayCommand::FillPath {

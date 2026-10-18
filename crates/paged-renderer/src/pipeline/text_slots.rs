@@ -285,6 +285,7 @@ mod tests {
                 transform: Transform::IDENTITY,
                 paint: Paint::Solid(Color::BLACK),
                 is_stroke: false,
+                structure: runs.current,
                 unicode: None,
             });
         }

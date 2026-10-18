@@ -4614,6 +4614,9 @@ pub(super) struct StoryEmitter<'a> {
     /// every pushed `BreakRecord`. Empty string when collection isn't
     /// enabled.
     pub(super) current_story_id: String,
+    /// The story's ordinal in document order, its tagged-PDF structure
+    /// key's first half (ADR 182).
+    pub(super) story_ordinal: u32,
     /// Track 2: monotonically incremented as `emit_paragraph` fires.
     /// Resets to 0 per emitter (i.e. per story).
     pub(super) paragraph_idx: u32,
@@ -4897,6 +4900,7 @@ impl<'a> StoryEmitter<'a> {
             footnote_scope: None,
             breaks: Vec::new(),
             current_story_id: String::new(),
+            story_ordinal: 0,
             paragraph_idx: 0,
             diagnostics: Vec::new(),
             overset_reported: false,
@@ -4977,7 +4981,25 @@ impl<'a> StoryEmitter<'a> {
 
     pub(super) fn with_story_id(mut self, story_id: &str) -> Self {
         self.current_story_id = story_id.to_string();
+        self.story_ordinal = self
+            .document
+            .stories
+            .iter()
+            .position(|s| s.self_id == story_id)
+            .unwrap_or(usize::MAX) as u32;
         self
+    }
+
+    /// ADR 182 — the paragraph the next glyphs belong to, for a tagged
+    /// PDF's structure; set on `list`'s glyph capture (a no-op when the
+    /// build captures none) and cleared with `None`.
+    pub(super) fn tag_glyphs(&self, list: &mut DisplayList, on: bool) {
+        if let Some(runs) = list.glyph_runs.as_mut() {
+            runs.current = on.then_some(paged_compose::StructKey {
+                story: self.story_ordinal,
+                paragraph: self.paragraph_idx,
+            });
+        }
     }
 
     /// W1.22 — wire the document-level numbering ledger so
@@ -8854,6 +8876,7 @@ fn emit_paragraph_lines(
             // story pass completes; the glyphs themselves emit at
             // BlendMode::Normal so the group composite is the single
             // place the IDML BlendingSetting takes effect.
+            em.tag_glyphs(&mut pages[target_page].list, true);
             emit_glyph_slice(
                 slice,
                 em.font_table.font_ref(fid),
@@ -8881,6 +8904,7 @@ fn emit_paragraph_lines(
                     &mut pages[target_page].list,
                 );
             }
+            em.tag_glyphs(&mut pages[target_page].list, false);
             start = end;
         }
         emit_line_decorations(
@@ -9233,6 +9257,7 @@ fn emit_paragraph_lines(
         }
         let outliner = TtfOutliner::new(&cap_outline);
         let before_cap_cmds = pages[target_page].list.commands.len();
+        em.tag_glyphs(&mut pages[target_page].list, true);
         emit_glyph_slice(
             &positioned,
             em.font_table.font_ref(cap_font_id),
@@ -9257,6 +9282,7 @@ fn emit_paragraph_lines(
                 &mut pages[target_page].list,
             );
         }
+        em.tag_glyphs(&mut pages[target_page].list, false);
         let after_cap_cmds = pages[target_page].list.commands.len();
         // Track the drop-cap glyphs against the same frame range so
         // any later transparency / vertical-justification pass

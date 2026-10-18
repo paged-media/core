@@ -67,6 +67,9 @@ pub struct FinishedPage {
     /// them in the page's `/Annots`. Empty when the build didn't
     /// collect link regions (the common case).
     pub link_annots: Vec<LinkAnnot>,
+    /// ADR 182 — the page's marked content by MCID: the paragraph each
+    /// marked text object belongs to. Empty unless the export is tagged.
+    pub mcids: Vec<paged_compose::StructKey>,
 }
 
 /// W1.4 — one resolved Link annotation, in PDF y-up media coords.
@@ -238,6 +241,19 @@ impl DocState {
             }
         }
 
+        // ADR 182 — the logical structure, before the page dicts that
+        // point into it (`/StructParents`).
+        let structure = if input.options.tagged {
+            Some(write_structure(
+                &mut self.pdf,
+                &mut self.refs,
+                &self.pages,
+                input,
+            ))
+        } else {
+            None
+        };
+
         for (page_idx, page) in self.pages.iter().enumerate() {
             // The shared indirect /Resources dict (page + its forms).
             {
@@ -290,6 +306,9 @@ impl DocState {
             p.crop_box(page.media_box);
             p.contents(page.content_ref);
             p.pair(Name(b"Resources"), page.resources_ref);
+            if structure.is_some() {
+                p.struct_parents(page_idx as i32);
+            }
             // W1.4 — list this page's Link annotation objects.
             let annot_refs = &annots_per_page[page_idx];
             if !annot_refs.is_empty() {
@@ -359,6 +378,14 @@ impl DocState {
             if let Some(m) = metadata_ref {
                 catalog.metadata(m);
             }
+            if let Some(root) = structure {
+                catalog.pair(Name(b"StructTreeRoot"), root);
+                catalog.mark_info().marked(true);
+                if let Some(lang) = &input.options.lang {
+                    catalog.lang(pdf_writer::TextStr(lang));
+                }
+                catalog.viewer_preferences().display_doc_title(true);
+            }
         }
 
         // Info dict — deterministic (no wall-clock); Trapped is a
@@ -384,6 +411,116 @@ impl DocState {
         }
         Ok(self.pdf.finish())
     }
+}
+
+/// ADR 182 — the logical structure InDesign writes into a tagged PDF
+/// (asked of InDesign 20.0.1, `tagged-pdf-probe` + `pdf-structure.py`):
+/// a `Document` holding one `Art`, one `Sect` per text story in document
+/// order, and one `P` per paragraph in story order, each paragraph
+/// referencing its text's marked content on every page it crosses. The
+/// parent tree maps each page's MCIDs back to their paragraphs. Returns
+/// the structure tree root.
+fn write_structure(
+    pdf: &mut Pdf,
+    refs: &mut RefAllocator,
+    pages: &[FinishedPage],
+    _input: &ExportInput<'_>,
+) -> Ref {
+    use pdf_writer::types::StructRole;
+    use std::collections::BTreeMap;
+    // Paragraphs in order, each with its (page, mcid) marks.
+    let mut paragraphs: BTreeMap<paged_compose::StructKey, Vec<(usize, i32)>> = BTreeMap::new();
+    for (page_idx, page) in pages.iter().enumerate() {
+        for (mcid, key) in page.mcids.iter().enumerate() {
+            paragraphs
+                .entry(*key)
+                .or_default()
+                .push((page_idx, mcid as i32));
+        }
+    }
+    let root_ref = refs.alloc();
+    let document_ref = refs.alloc();
+    let article_ref = refs.alloc();
+    let mut stories: BTreeMap<u32, (Ref, Vec<Ref>)> = BTreeMap::new();
+    let mut para_refs: BTreeMap<paged_compose::StructKey, Ref> = BTreeMap::new();
+    for key in paragraphs.keys() {
+        let story = stories
+            .entry(key.story)
+            .or_insert_with(|| (refs.alloc(), Vec::new()));
+        let r = refs.alloc();
+        story.1.push(r);
+        para_refs.insert(*key, r);
+    }
+    for (key, marks) in &paragraphs {
+        let (story_ref, _) = stories[&key.story];
+        let mut e = pdf.struct_element(para_refs[key]);
+        e.kind(StructRole::P);
+        e.parent(story_ref);
+        if let Some(&(first, _)) = marks.first() {
+            e.page(pages[first].page_ref);
+        }
+        let mut kids = e.children();
+        for &(page_idx, mcid) in marks {
+            if Some(page_idx) == marks.first().map(|m| m.0) {
+                kids.marked_content_id(mcid);
+            } else {
+                kids.marked_content_ref()
+                    .page(pages[page_idx].page_ref)
+                    .marked_content_id(mcid);
+            }
+        }
+    }
+    for (story_ref, kids) in stories.values() {
+        let mut e = pdf.struct_element(*story_ref);
+        e.kind(StructRole::Sect);
+        e.parent(article_ref);
+        let mut c = e.children();
+        for k in kids {
+            c.struct_element(*k);
+        }
+    }
+    {
+        let mut e = pdf.struct_element(article_ref);
+        e.kind(StructRole::Art);
+        e.parent(document_ref);
+        let mut c = e.children();
+        for (story_ref, _) in stories.values() {
+            c.struct_element(*story_ref);
+        }
+    }
+    {
+        let mut e = pdf.struct_element(document_ref);
+        e.kind(StructRole::Document);
+        e.parent(root_ref);
+        e.children().struct_element(article_ref);
+    }
+    // Each page's parent-tree entry: its MCIDs' paragraphs, in MCID order.
+    let parent_arrays: Vec<(usize, Ref)> = pages
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !p.mcids.is_empty())
+        .map(|(i, _)| (i, refs.alloc()))
+        .collect();
+    {
+        let mut root = pdf
+            .indirect(root_ref)
+            .start::<pdf_writer::writers::StructTreeRoot>();
+        root.child(document_ref);
+        {
+            let mut tree = root.parent_tree();
+            let mut nums = tree.nums();
+            for &(page_idx, arr_ref) in &parent_arrays {
+                nums.insert(page_idx as i32, arr_ref);
+            }
+        }
+        root.parent_tree_next_key(pages.len() as i32);
+    }
+    for &(page_idx, arr_ref) in &parent_arrays {
+        pdf.indirect(arr_ref)
+            .array()
+            .items(pages[page_idx].mcids.iter().map(|k| para_refs[k]));
+    }
+    root_ref
 }
 
 /// Write `bookmarks` as the document outline (ADR 171): every item nested
