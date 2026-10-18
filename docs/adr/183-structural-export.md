@@ -39,5 +39,10 @@ pages:
 - `removed_page_spread_drops_out_of_the_export` (`idml_export_saveback.rs`),
   `master_transparency_roundtrip` (plugin-publish) and `blank_idml_states_its_document_setup`
   pin the three behaviours.
-- Masters minted without a source entry and fonts declared in `Fonts.xml` (the rest of A-33)
-  remain open.
+- The rest of A-33, asked 2026-10-18:
+  - A master created in the engine is written to `MasterSpreads/` and the designmap already; a
+    blank document saved with a new master carries both.
+  - `Fonts.xml` need not declare the faces in use. `fonts-probe` opened InDesign's own package
+    with its `Fonts.xml` emptied. InDesign resolved the text to the same face (Minion Pro
+    Regular, installed) and embedded the same font in its PDF as with the original list, so a
+    package written with an empty font list loses nothing InDesign shows.
